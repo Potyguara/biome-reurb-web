@@ -1,0 +1,88 @@
+# macOS
+.DS_Store
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# Variáveis e segredos
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+venv/
+.venv/
+backend/venv/
+backend/.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node / Next.js
+node_modules/
+frontend/node_modules/
+.next/
+frontend/.next/
+out/
+frontend/out/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Arquivos locais de ambiente do frontend
+frontend/.env
+frontend/.env.local
+frontend/.env.development.local
+frontend/.env.test.local
+frontend/.env.production.local
+
+# Bancos locais
+*.sqlite
+*.sqlite3
+*.db
+
+# Armazenamento gerado pela aplicação
+storage/*
+backend/storage/*
+!storage/.gitkeep
+!backend/storage/.gitkeep
+
+# Arquivos geoespaciais e raster pesados
+*.tif
+*.tiff
+*.geotiff
+*.mbtiles
+*.gpkg
+*.las
+*.laz
+
+# Exportações e compactados
+*.zip
+*.tar
+*.tar.gz
+*.7z
+
+# Logs e temporários
+*.log
+logs/
+tmp/
+temp/
+.cache/
+
+# Certificados e chaves
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+id_rsa
+id_ed25519
