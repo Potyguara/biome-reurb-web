@@ -2,7 +2,17 @@ import uuid
 from datetime import datetime
 
 from geoalchemy2 import Geometry
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -166,6 +176,19 @@ class Lot(Base, UUIDMixin, TimestampMixin):
 
 class Seal(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "seals"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id",
+            "source_device_id",
+            "source_local_id",
+            name="uq_seals_project_device_local",
+        ),
+        UniqueConstraint(
+            "project_id",
+            "seal_code",
+            name="uq_seals_project_code",
+        ),
+    )
 
     project_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -195,6 +218,62 @@ class Seal(Base, UUIDMixin, TimestampMixin):
     situation: Mapped[str] = mapped_column(
         String(100),
         nullable=False,
+    )
+
+    resident_present: Mapped[bool | None] = mapped_column(
+        Boolean,
+        nullable=True,
+    )
+
+    dwelling_occupied: Mapped[bool | None] = mapped_column(
+        Boolean,
+        nullable=True,
+    )
+
+    service_status: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+    )
+
+    unit_type: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+    )
+
+    property_use: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+    )
+
+    informant_name: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+
+    informant_phone: Mapped[str | None] = mapped_column(
+        String(50),
+        nullable=True,
+    )
+
+    informant_relationship: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+    )
+
+    revisit_required: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+    )
+
+    facade_photo_path: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    notes: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
     )
 
     geo_link_status: Mapped[str] = mapped_column(
@@ -231,6 +310,127 @@ class Seal(Base, UUIDMixin, TimestampMixin):
 
     geom = mapped_column(
         Geometry("POINT", srid=4326),
+        nullable=True,
+    )
+
+    source_local_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=True,
+        index=True,
+    )
+
+    source_device_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=True,
+        index=True,
+    )
+
+    client_created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    client_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    server_received_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    sync_version: Mapped[int] = mapped_column(
+        Integer,
+        default=1,
+        nullable=False,
+    )
+
+    deleted: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+    )
+
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id"),
+        nullable=True,
+        index=True,
+    )
+
+    updated_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id"),
+        nullable=True,
+        index=True,
+    )
+
+
+class SealCodeReservation(Base, UUIDMixin, TimestampMixin):
+    __tablename__ = "seal_code_reservations"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id",
+            "start_number",
+            "end_number",
+            name="uq_seal_reservation_range",
+        ),
+    )
+
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("projects.id"),
+        nullable=False,
+        index=True,
+    )
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id"),
+        nullable=False,
+        index=True,
+    )
+
+    device_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=False,
+        index=True,
+    )
+
+    prefix: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+    )
+
+    start_number: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+    )
+
+    end_number: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+    )
+
+    next_number: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+    )
+
+    quantity: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+
+    active: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        nullable=False,
+    )
+
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
         nullable=True,
     )
 
