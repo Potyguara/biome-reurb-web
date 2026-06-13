@@ -7,6 +7,7 @@ from app.api.access import router as access_router
 from app.api.audit import router as audit_router
 from app.api.auth import router as auth_router
 from app.api.imports import router as imports_router
+from app.api.mobile import router as mobile_router
 from app.api.projects import router as projects_router
 from app.api.reurb import router as reurb_router
 from app.api.users import router as users_router
@@ -51,4 +52,5 @@ app.include_router(access_router)
 app.include_router(audit_router)
 app.include_router(imports_router)
 app.include_router(reurb_router)
+app.include_router(mobile_router)
 app.include_router(public_reurb.router)
