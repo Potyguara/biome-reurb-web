@@ -129,6 +129,8 @@ def reserve_seal_codes(
     end_number = start_number + payload.quantity - 1
     prefix = _project_prefix(project)
 
+    now = _utcnow()
+
     reservation = SealCodeReservation(
         project_id=project_id,
         user_id=current_user.id,
@@ -139,7 +141,9 @@ def reserve_seal_codes(
         next_number=start_number,
         quantity=payload.quantity,
         active=True,
-        expires_at=_utcnow() + timedelta(days=180),
+        expires_at=now + timedelta(days=180),
+        created_at=now,
+        updated_at=now,
     )
 
     db.add(reservation)
@@ -226,6 +230,8 @@ def push_mobile_seals(
                     created_by_user_id=current_user.id,
                     sync_version=1,
                     server_received_at=now,
+                    created_at=now,
+                    updated_at=now,
                 )
                 db.add(seal)
 
@@ -275,6 +281,7 @@ def push_mobile_seals(
             seal.deleted = item.deleted
             seal.updated_by_user_id = current_user.id
             seal.server_received_at = now
+            seal.updated_at = now
 
             if item.latitude is not None and item.longitude is not None:
                 seal.geom = ST_SetSRID(
