@@ -8,6 +8,9 @@ from app.api.audit import router as audit_router
 from app.api.auth import router as auth_router
 from app.api.imports import router as imports_router
 from app.api.mobile import router as mobile_router
+from app.api.mobile_lot_geometry_sync import (
+    router as mobile_lot_geometry_sync_router,
+)
 from app.api.mobile_seal_sync import router as mobile_seal_sync_router
 from app.api.projects import router as projects_router
 from app.api.reurb import router as reurb_router
@@ -55,4 +58,5 @@ app.include_router(imports_router)
 app.include_router(reurb_router)
 app.include_router(mobile_router)
 app.include_router(mobile_seal_sync_router)
+app.include_router(mobile_lot_geometry_sync_router)
 app.include_router(public_reurb.router)
