@@ -17,6 +17,9 @@ from app.api.reurb import router as reurb_router
 from app.api.users import router as users_router
 from app.core.config import get_settings
 from app.db.session import Base, engine
+from app.api.mobile_field_sync import (
+    router as mobile_field_sync_router,
+)
 
 settings = get_settings()
 
@@ -60,3 +63,4 @@ app.include_router(mobile_router)
 app.include_router(mobile_seal_sync_router)
 app.include_router(mobile_lot_geometry_sync_router)
 app.include_router(public_reurb.router)
+app.include_router(mobile_field_sync_router)
