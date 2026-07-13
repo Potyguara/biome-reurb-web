@@ -1063,10 +1063,15 @@ def import_mobile_json_to_database(
             document.social_registration_id = (
                 social_id or document.social_registration_id
             )
-            document.notes = _text(row, "observacoes", "notes", default=document.notes)
+            document.notes = _text(
+                row,
+                "observacoes",
+                "notes",
+                default=document.notes,
+            )
             updated["documents"] += 1
 
-            db.commit()
+    db.commit()
 
     return {
         "created": created,

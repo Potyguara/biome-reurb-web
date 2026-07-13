@@ -110,6 +110,27 @@ def sync_mobile_field_records(
             forced_project_id=payload.project_id,
         )
 
+        created = result.get("created", {})
+        updated = result.get("updated", {})
+
+        social_processed = created.get("social_registrations", 0) + updated.get(
+            "social_registrations", 0
+        )
+
+        physical_processed = created.get("physical_registrations", 0) + updated.get(
+            "physical_registrations", 0
+        )
+
+        if social_processed != len(payload.social_registrations):
+            raise ValueError(
+                "Nem todos os cadastros sociais foram persistidos no servidor."
+            )
+
+        if physical_processed != len(payload.physical_registrations):
+            raise ValueError(
+                "Nem todos os cadastros físicos foram persistidos no servidor."
+            )
+
         accepted = [
             MobileFieldSyncAccepted(
                 entity_type="social_registration",
@@ -129,8 +150,8 @@ def sync_mobile_field_records(
         return MobileFieldSyncResponse(
             batch_id=payload.batch_id,
             accepted=accepted,
-            created=result.get("created", {}),
-            updated=result.get("updated", {}),
+            created=created,
+            updated=updated,
             server_time=_utcnow(),
         )
 
