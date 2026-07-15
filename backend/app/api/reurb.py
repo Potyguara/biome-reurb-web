@@ -1705,7 +1705,10 @@ def list_project_seals(
 ) -> list[SealResponse]:
     _ensure_project_access(db, project_id=project_id, current_user=current_user)
 
-    query = db.query(Seal).filter(Seal.project_id == project_id)
+    query = db.query(Seal).filter(
+        Seal.project_id == project_id,
+        Seal.deleted.is_(False),
+    )
 
     if search:
         like = f"%{search}%"
@@ -6319,16 +6322,15 @@ def delete_seal_administratively(
         seal.server_received_at = now
         seal.updated_at = now
 
-        db.commit()
-
         register_audit_log(
             db,
-            user_id=current_user.id,
+            user=current_user,
             action="delete",
             entity_type="seal",
             entity_id=seal.id,
             project_id=project_id,
-            details={
+            description=(f"Selagem {seal.seal_code} excluída administrativamente."),
+            metadata={
                 "seal_code": seal.seal_code,
                 "social_registrations_removed": int(social_count),
                 "physical_registrations_removed": int(physical_count),
