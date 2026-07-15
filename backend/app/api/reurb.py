@@ -1,12 +1,12 @@
 from datetime import datetime, timezone
 from uuid import UUID
 import mimetypes
-from fastapi import Form
 
 from fastapi import (
     APIRouter,
     Depends,
     File,
+    Form,
     HTTPException,
     Query,
     Request,
@@ -23,6 +23,7 @@ from app.models.project import Project
 from app.models.reurb import (
     Document,
     Lot,
+    LotGeometry,
     PhysicalRegistration,
     Seal,
     SocialRegistration,
@@ -31,7 +32,11 @@ from app.models.reurb import (
 from app.models.user import User
 from app.schemas.reurb import (
     DocumentResponse,
+    DocumentValidateRequest,
+    DocumentValidationUpdate,
     LotDeleteCheckResponse,
+    LotDocumentResponse,
+    LotDocumentUploadResponse,
     LotLinkCandidateResponse,
     LotLinkSealRequest,
     LotLinkSealResponse,
@@ -39,6 +44,7 @@ from app.schemas.reurb import (
     LotReviewResponse,
     LotReviewUpdate,
     PhysicalRegistrationResponse,
+    PhysicalRegistrationUpdateRequest,
     ProjectDashboardResponse,
     ProjectMapLotResponse,
     ProjectMapPhysicalResponse,
@@ -48,14 +54,12 @@ from app.schemas.reurb import (
     ProjectMapSealWithoutLotResponse,
     ProjectMapSocialResponse,
     ProjectMapSummaryResponse,
+    SealDeleteCheckResponse,
+    SealDeleteResponse,
     SealResponse,
+    SealUpdateRequest,
     SocialRegistrationResponse,
-    DocumentValidationUpdate,
-    LotDocumentResponse,
-    LotDocumentUploadResponse,
-    DocumentValidateRequest,
     SocialRegistrationUpdateRequest,
-    PhysicalRegistrationUpdateRequest,
 )
 from app.services.audit_service import register_audit_log
 from app.services.geospatial_import_service import (
@@ -1556,6 +1560,19 @@ def _document_to_response(item: Document) -> DocumentResponse:
             else None
         ),
     )
+
+
+def _ensure_administrative_access(
+    current_user: User,
+) -> None:
+    if not current_user.is_global_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Somente um administrador global pode excluir "
+                "selagens pelo painel web."
+            ),
+        )
 
 
 @router.get("/dashboard", response_model=ProjectDashboardResponse)
@@ -6109,3 +6126,233 @@ def delete_project_orthomosaic(
             _orthomosaic_to_response(new_active) if new_active else None
         ),
     }
+
+
+@router.get(
+    "/seals/{seal_id}/delete-check",
+    response_model=SealDeleteCheckResponse,
+)
+def check_seal_deletion(
+    project_id: UUID,
+    seal_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> SealDeleteCheckResponse:
+    _ensure_administrative_access(current_user)
+
+    seal = (
+        db.query(Seal)
+        .filter(
+            Seal.id == seal_id,
+            Seal.project_id == project_id,
+            Seal.deleted.is_(False),
+        )
+        .first()
+    )
+
+    if seal is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Selagem não encontrada ou já excluída.",
+        )
+
+    social_count = (
+        db.query(func.count(SocialRegistration.id))
+        .filter(
+            SocialRegistration.project_id == project_id,
+            SocialRegistration.seal_id == seal.id,
+        )
+        .scalar()
+        or 0
+    )
+
+    physical_count = (
+        db.query(func.count(PhysicalRegistration.id))
+        .filter(
+            PhysicalRegistration.project_id == project_id,
+            PhysicalRegistration.seal_id == seal.id,
+        )
+        .scalar()
+        or 0
+    )
+
+    document_count = (
+        db.query(func.count(Document.id))
+        .filter(
+            Document.project_id == project_id,
+            Document.seal_id == seal.id,
+        )
+        .scalar()
+        or 0
+    )
+
+    geometry_count = (
+        db.query(func.count(LotGeometry.id))
+        .filter(
+            LotGeometry.project_id == project_id,
+            LotGeometry.seal_id == seal.id,
+            LotGeometry.deleted.is_(False),
+        )
+        .scalar()
+        or 0
+    )
+
+    return SealDeleteCheckResponse(
+        seal_id=seal.id,
+        seal_code=seal.seal_code,
+        social_registrations=int(social_count),
+        physical_registrations=int(physical_count),
+        documents=int(document_count),
+        lot_geometries=int(geometry_count),
+        linked_lot=seal.lot_id is not None,
+    )
+
+
+@router.delete(
+    "/seals/{seal_id}",
+    response_model=SealDeleteResponse,
+)
+def delete_seal_administratively(
+    project_id: UUID,
+    seal_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> SealDeleteResponse:
+    _ensure_administrative_access(current_user)
+
+    seal = (
+        db.query(Seal)
+        .filter(
+            Seal.id == seal_id,
+            Seal.project_id == project_id,
+        )
+        .with_for_update()
+        .first()
+    )
+
+    if seal is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Selagem não encontrada.",
+        )
+
+    if seal.deleted:
+        return SealDeleteResponse(
+            seal_id=seal.id,
+            seal_code=seal.seal_code,
+            message="A selagem já estava excluída.",
+        )
+
+    try:
+        social_count = (
+            db.query(func.count(SocialRegistration.id))
+            .filter(
+                SocialRegistration.project_id == project_id,
+                SocialRegistration.seal_id == seal.id,
+            )
+            .scalar()
+            or 0
+        )
+
+        physical_count = (
+            db.query(func.count(PhysicalRegistration.id))
+            .filter(
+                PhysicalRegistration.project_id == project_id,
+                PhysicalRegistration.seal_id == seal.id,
+            )
+            .scalar()
+            or 0
+        )
+
+        document_count = (
+            db.query(func.count(Document.id))
+            .filter(
+                Document.project_id == project_id,
+                Document.seal_id == seal.id,
+            )
+            .scalar()
+            or 0
+        )
+
+        geometries = (
+            db.query(LotGeometry)
+            .filter(
+                LotGeometry.project_id == project_id,
+                LotGeometry.seal_id == seal.id,
+                LotGeometry.deleted.is_(False),
+            )
+            .all()
+        )
+
+        now = datetime.now(timezone.utc)
+
+        for geometry in geometries:
+            geometry.deleted = True
+            geometry.is_current = False
+            geometry.workflow_status = "arquivado"
+            geometry.validation_note = (
+                "Geometria arquivada automaticamente porque a "
+                "selagem vinculada foi excluída pelo painel web."
+            )
+            geometry.updated_at = now
+
+        db.query(Document).filter(
+            Document.project_id == project_id,
+            Document.seal_id == seal.id,
+        ).delete(synchronize_session=False)
+
+        db.query(PhysicalRegistration).filter(
+            PhysicalRegistration.project_id == project_id,
+            PhysicalRegistration.seal_id == seal.id,
+        ).delete(synchronize_session=False)
+
+        db.query(SocialRegistration).filter(
+            SocialRegistration.project_id == project_id,
+            SocialRegistration.seal_id == seal.id,
+        ).delete(synchronize_session=False)
+
+        seal.lot_id = None
+        seal.deleted = True
+        seal.sync_version = (seal.sync_version or 0) + 1
+        seal.updated_by_user_id = current_user.id
+        seal.server_received_at = now
+        seal.updated_at = now
+
+        db.commit()
+
+        register_audit_log(
+            db,
+            user_id=current_user.id,
+            action="delete",
+            entity_type="seal",
+            entity_id=seal.id,
+            project_id=project_id,
+            details={
+                "seal_code": seal.seal_code,
+                "social_registrations_removed": int(social_count),
+                "physical_registrations_removed": int(physical_count),
+                "documents_removed": int(document_count),
+                "lot_geometries_archived": len(geometries),
+            },
+        )
+
+        return SealDeleteResponse(
+            seal_id=seal.id,
+            seal_code=seal.seal_code,
+            social_registrations_removed=int(social_count),
+            physical_registrations_removed=int(physical_count),
+            documents_removed=int(document_count),
+            lot_geometries_archived=len(geometries),
+            message=(
+                "Selagem excluída e dependências tratadas. "
+                "A exclusão será refletida nos aplicativos na próxima sincronização."
+            ),
+        )
+
+    except Exception as exc:
+        db.rollback()
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Não foi possível excluir a selagem: {exc}",
+        ) from exc

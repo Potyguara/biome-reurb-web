@@ -444,3 +444,30 @@ class PhysicalRegistrationUpdateRequest(BaseModel):
     flood_prone: bool | None = None
 
     notes: str | None = None
+
+
+from uuid import UUID
+
+from pydantic import BaseModel, Field
+
+
+class SealDeleteCheckResponse(BaseModel):
+    seal_id: UUID
+    seal_code: str
+    can_delete: bool = True
+    social_registrations: int = 0
+    physical_registrations: int = 0
+    documents: int = 0
+    lot_geometries: int = 0
+    linked_lot: bool = False
+
+
+class SealDeleteResponse(BaseModel):
+    seal_id: UUID
+    seal_code: str
+    deleted: bool = True
+    social_registrations_removed: int = Field(default=0)
+    physical_registrations_removed: int = Field(default=0)
+    documents_removed: int = Field(default=0)
+    lot_geometries_archived: int = Field(default=0)
+    message: str
