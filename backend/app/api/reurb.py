@@ -19,16 +19,17 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models.access import ProjectUser
+from app.models.lot_geometry import LotGeometry
 from app.models.project import Project
 from app.models.reurb import (
     Document,
     Lot,
-    LotGeometry,
     PhysicalRegistration,
+    ProjectOrthomosaic,
     Seal,
     SocialRegistration,
-    ProjectOrthomosaic,
 )
+
 from app.models.user import User
 from app.schemas.reurb import (
     DocumentResponse,
