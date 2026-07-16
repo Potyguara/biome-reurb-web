@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -6,7 +7,7 @@ from pydantic import BaseModel, Field
 
 class MobileFieldSyncRecord(BaseModel):
     source_local_id: str
-    payload: dict
+    payload: dict[str, Any]
 
 
 class MobileFieldSyncRequest(BaseModel):
@@ -49,5 +50,19 @@ class MobileFieldSyncResponse(BaseModel):
 
     created: dict[str, int] = Field(default_factory=dict)
     updated: dict[str, int] = Field(default_factory=dict)
+
+    server_time: datetime
+
+
+class MobileFieldSyncPullResponse(BaseModel):
+    project_id: UUID
+
+    social_registrations: list[dict[str, Any]] = Field(
+        default_factory=list,
+    )
+
+    physical_registrations: list[dict[str, Any]] = Field(
+        default_factory=list,
+    )
 
     server_time: datetime
