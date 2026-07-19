@@ -102,7 +102,7 @@ from app.services.document_storage import (
     IMPORT_STORAGE_DIR,
     safe_filename,
     extract_file_extension,
-    _resolve_document_path,
+    resolve_document_path,
     _copy_mobile_document_to_project_storage,
 )
 
@@ -3690,7 +3690,7 @@ def get_project_document_file(
             detail="Documento não encontrado.",
         )
 
-    file_path = _resolve_document_path(document)
+    file_path = resolve_document_path(document)
 
     if file_path is None:
         raise HTTPException(
