@@ -103,7 +103,7 @@ from app.services.document_storage import (
     safe_filename,
     extract_file_extension,
     resolve_document_path,
-    _copy_mobile_document_to_project_storage,
+    copy_mobile_document_to_project_storage,
 )
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["Consulta REURB"])
@@ -3703,7 +3703,7 @@ def get_project_document_file(
 
     # Se veio do mobile/imports/extracted, copia para storage/documents e atualiza o registro.
     if "storage/imports" in str(file_path).replace("\\", "/"):
-        stored_file = _copy_mobile_document_to_project_storage(
+        stored_file = copy_mobile_document_to_project_storage(
             project_id=project_id,
             source_path=file_path,
             fallback_filename=file_path.name,
