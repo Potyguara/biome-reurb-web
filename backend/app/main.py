@@ -20,6 +20,7 @@ from app.db.session import Base, engine
 from app.api.mobile_field_sync import (
     router as mobile_field_sync_router,
 )
+from app.api.mobile_document_sync import router as mobile_document_sync_router
 
 settings = get_settings()
 
@@ -62,5 +63,6 @@ app.include_router(reurb_router)
 app.include_router(mobile_router)
 app.include_router(mobile_seal_sync_router)
 app.include_router(mobile_lot_geometry_sync_router)
+app.include_router(mobile_document_sync_router)
 app.include_router(public_reurb.router)
 app.include_router(mobile_field_sync_router)

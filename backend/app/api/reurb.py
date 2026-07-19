@@ -97,6 +97,15 @@ from reportlab.lib.units import cm
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 import subprocess
 
+from app.services.document_storage import (
+    DOCUMENT_STORAGE_DIR,
+    IMPORT_STORAGE_DIR,
+    safe_filename,
+    extract_file_extension,
+    _resolve_document_path,
+    _copy_mobile_document_to_project_storage,
+)
+
 router = APIRouter(prefix="/projects/{project_id}", tags=["Consulta REURB"])
 EXPORTS_DIR = Path("storage/exports")
 STORAGE_DIR = Path("storage")
@@ -1431,103 +1440,6 @@ def _physical_to_response(
         flood_prone=item.flood_prone,
         notes=item.notes,
     )
-
-
-DOCUMENT_STORAGE_DIR = Path("storage/documents")
-IMPORT_STORAGE_DIR = Path("storage/imports")
-
-
-def _safe_filename(filename: str) -> str:
-    filename = filename.replace("\\", "/").split("/")[-1].strip()
-
-    if not filename:
-        return "documento"
-
-    blocked = {"..", ".", "/", "\\"}
-
-    for item in blocked:
-        filename = filename.replace(item, "")
-
-    return filename or "documento"
-
-
-def _extract_file_extension(filename: str, content_type: str | None = None) -> str:
-    suffix = Path(filename).suffix.lower()
-
-    if suffix:
-        return suffix
-
-    if content_type:
-        guessed = mimetypes.guess_extension(content_type.split(";")[0].strip())
-
-        if guessed:
-            return guessed
-
-    return ""
-
-
-def _resolve_document_path(document: Document) -> Path | None:
-    """
-    Resolve documentos novos salvos no storage/documents e documentos antigos/importados
-    vindos do mobile em storage/imports/**/extracted.
-    """
-    raw_path = (document.file_path or "").strip()
-
-    if not raw_path:
-        return None
-
-    candidates: list[Path] = []
-
-    direct = Path(raw_path)
-
-    if direct.is_absolute():
-        candidates.append(direct)
-    else:
-        candidates.append(Path(raw_path))
-        candidates.append(Path("storage") / raw_path)
-
-    filename = Path(raw_path.replace("\\", "/")).name
-
-    if filename:
-        candidates.append(DOCUMENT_STORAGE_DIR / str(document.project_id) / filename)
-
-        if IMPORT_STORAGE_DIR.exists():
-            candidates.extend(IMPORT_STORAGE_DIR.rglob(filename))
-
-    for candidate in candidates:
-        try:
-            if candidate.exists() and candidate.is_file():
-                return candidate
-        except Exception:
-            continue
-
-    return None
-
-
-def _copy_mobile_document_to_project_storage(
-    *,
-    project_id: UUID,
-    source_path: Path,
-    fallback_filename: str,
-) -> str:
-    """
-    Quando o documento veio do mobile/imports/extracted, copia para storage/documents
-    para padronizar abertura futura.
-    """
-    DOCUMENT_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
-
-    project_dir = DOCUMENT_STORAGE_DIR / str(project_id)
-    project_dir.mkdir(parents=True, exist_ok=True)
-
-    original_name = _safe_filename(fallback_filename or source_path.name)
-    suffix = Path(original_name).suffix or source_path.suffix
-
-    stored_name = f"{uuid.uuid4()}{suffix}"
-    target_path = project_dir / stored_name
-
-    shutil.copyfile(source_path, target_path)
-
-    return str(target_path)
 
 
 def _document_to_response(item: Document) -> DocumentResponse:
@@ -3791,17 +3703,20 @@ def get_project_document_file(
 
     # Se veio do mobile/imports/extracted, copia para storage/documents e atualiza o registro.
     if "storage/imports" in str(file_path).replace("\\", "/"):
-        new_path = _copy_mobile_document_to_project_storage(
+        stored_file = _copy_mobile_document_to_project_storage(
             project_id=project_id,
             source_path=file_path,
             fallback_filename=file_path.name,
         )
 
-        document.file_path = new_path
+        document.file_path = stored_file.file_path
+        document.stored_filename = stored_file.stored_filename
+        document.file_size_bytes = stored_file.file_size_bytes
+
         db.commit()
         db.refresh(document)
 
-        file_path = Path(new_path)
+        file_path = Path(stored_file.file_path)
 
     filename = file_path.name
     media_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"

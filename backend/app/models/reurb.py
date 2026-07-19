@@ -700,9 +700,9 @@ class Document(Base, UUIDMixin, TimestampMixin):
         nullable=False,
     )
 
-    file_path: Mapped[str] = mapped_column(
+    file_path: Mapped[str | None] = mapped_column(
         String(500),
-        nullable=False,
+        nullable=True,
     )
 
     original_filename: Mapped[str | None] = mapped_column(
@@ -757,6 +757,60 @@ class Document(Base, UUIDMixin, TimestampMixin):
         ForeignKey("users.id"),
         nullable=True,
         index=True,
+    )
+
+    # ------------------------------------------------------------------
+    # Sincronização Mobile
+    # ------------------------------------------------------------------
+
+    mobile_import_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("mobile_imports.id"),
+        nullable=True,
+        index=True,
+    )
+
+    source_local_id: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        index=True,
+    )
+
+    source_device_id: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    imported_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    client_created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    client_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    server_received_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    sync_version: Mapped[int] = mapped_column(
+        Integer,
+        default=1,
+        nullable=False,
+    )
+
+    deleted: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
     )
 
 
