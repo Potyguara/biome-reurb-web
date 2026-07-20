@@ -1,3 +1,4 @@
+import logging
 import os
 import tempfile
 from datetime import datetime, timezone
@@ -39,7 +40,7 @@ from app.services.document_storage import (
 )
 
 logger = logging.getLogger(__name__)
-import logging
+
 
 router = APIRouter(
     prefix="/mobile",
