@@ -1,4 +1,3 @@
-import logging
 import os
 import tempfile
 from datetime import datetime, timezone
@@ -40,6 +39,7 @@ from app.services.document_storage import (
 )
 
 logger = logging.getLogger(__name__)
+import logging
 
 router = APIRouter(
     prefix="/mobile",
@@ -230,8 +230,8 @@ def push_documents(
                 existing = _find_existing_document(
                     db,
                     project_id=payload.project_id,
-                    source_local_id=item.source_local_id,
-                    source_device_id=item.source_device_id,
+                    source_local_id=str(item.source_local_id),
+                    source_device_id=str(item.source_device_id),
                 )
 
                 now = _utcnow()
@@ -338,6 +338,15 @@ def push_documents(
                 )
 
         except ValueError as exc:
+            logger.warning(
+                "Documento mobile rejeitado por referência inválida. "
+                "project_id=%s source_local_id=%s source_device_id=%s reason=%s",
+                payload.project_id,
+                item.source_local_id,
+                item.source_device_id,
+                exc,
+            )
+
             rejected.append(
                 MobileDocumentRejectedItem(
                     source_local_id=item.source_local_id,
