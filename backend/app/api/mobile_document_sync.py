@@ -1,3 +1,4 @@
+import logging
 import os
 import tempfile
 from datetime import datetime, timezone
@@ -37,6 +38,8 @@ from app.services.document_storage import (
     resolve_document_path,
     safe_filename,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/mobile",
@@ -145,12 +148,15 @@ def _find_existing_document(
     source_local_id: UUID,
     source_device_id: UUID,
 ) -> Document | None:
+    source_local_id_text = str(source_local_id)
+    source_device_id_text = str(source_device_id)
+
     return (
         db.query(Document)
         .filter(
             Document.project_id == project_id,
-            Document.source_local_id == source_local_id,
-            Document.source_device_id == source_device_id,
+            Document.source_local_id == source_local_id_text,
+            Document.source_device_id == source_device_id_text,
         )
         .first()
     )
@@ -233,8 +239,8 @@ def push_documents(
                 if existing is None:
                     document = Document(
                         project_id=payload.project_id,
-                        source_local_id=item.source_local_id,
-                        source_device_id=item.source_device_id,
+                        source_local_id=str(item.source_local_id),
+                        source_device_id=str(item.source_device_id),
                         lot_id=item.lot_id,
                         seal_id=item.seal_id,
                         social_registration_id=item.social_registration_id,
@@ -289,7 +295,8 @@ def push_documents(
                     )
 
                     continue
-
+                existing.source_local_id = str(item.source_local_id)
+                existing.source_device_id = str(item.source_device_id)
                 existing.lot_id = item.lot_id
                 existing.seal_id = item.seal_id
                 existing.social_registration_id = item.social_registration_id
@@ -338,6 +345,14 @@ def push_documents(
                 )
             )
         except Exception as exc:
+            logger.exception(
+                "Falha ao sincronizar documento mobile. "
+                "project_id=%s source_local_id=%s source_device_id=%s",
+                payload.project_id,
+                item.source_local_id,
+                item.source_device_id,
+            )
+
             rejected.append(
                 MobileDocumentRejectedItem(
                     source_local_id=item.source_local_id,
