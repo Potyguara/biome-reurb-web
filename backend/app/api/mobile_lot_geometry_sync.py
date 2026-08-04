@@ -79,26 +79,38 @@ def _validate_references(
     social_registration_id: UUID | None,
 ) -> None:
     if lot_id is not None:
-        exists = db.query(Lot.id).filter(
-            Lot.id == lot_id,
-            Lot.project_id == project_id,
-        ).first()
+        exists = (
+            db.query(Lot.id)
+            .filter(
+                Lot.id == lot_id,
+                Lot.project_id == project_id,
+            )
+            .first()
+        )
         if exists is None:
             raise ValueError("O lote informado não pertence ao projeto.")
 
     if seal_id is not None:
-        exists = db.query(Seal.id).filter(
-            Seal.id == seal_id,
-            Seal.project_id == project_id,
-        ).first()
+        exists = (
+            db.query(Seal.id)
+            .filter(
+                Seal.id == seal_id,
+                Seal.project_id == project_id,
+            )
+            .first()
+        )
         if exists is None:
             raise ValueError("A selagem informada não pertence ao projeto.")
 
     if social_registration_id is not None:
-        exists = db.query(SocialRegistration.id).filter(
-            SocialRegistration.id == social_registration_id,
-            SocialRegistration.project_id == project_id,
-        ).first()
+        exists = (
+            db.query(SocialRegistration.id)
+            .filter(
+                SocialRegistration.id == social_registration_id,
+                SocialRegistration.project_id == project_id,
+            )
+            .first()
+        )
         if exists is None:
             raise ValueError("O cadastro social informado não pertence ao projeto.")
 
@@ -119,18 +131,20 @@ def _apply_geometry(record: LotGeometry, geometry_geojson: dict | None) -> None:
 
 
 def _assert_valid_geometry(db: Session, geometry_id: UUID) -> None:
-    result = db.execute(
-        text(
-            """
+    result = (
+        db.execute(
+            text("""
             SELECT
                 CASE WHEN geom IS NULL THEN TRUE ELSE ST_IsValid(geom) END AS is_valid,
                 CASE WHEN geom IS NULL THEN NULL ELSE ST_IsValidReason(geom) END AS reason
             FROM lot_geometries
             WHERE id = :geometry_id
-            """
-        ),
-        {"geometry_id": geometry_id},
-    ).mappings().one()
+            """),
+            {"geometry_id": geometry_id},
+        )
+        .mappings()
+        .one()
+    )
 
     if not result["is_valid"]:
         raise ValueError(
@@ -237,6 +251,16 @@ def push_mobile_lot_geometries(
         savepoint = db.begin_nested()
 
         try:
+            allowed_mobile_origins = {
+                "cidadao_declarado",
+                "cidadao_vetorizado",
+            }
+
+            if item.origin not in allowed_mobile_origins:
+                raise ValueError(
+                    "O aplicativo móvel não possui permissão para "
+                    f"criar geometria com origem '{item.origin}'."
+                )
             _validate_references(
                 db,
                 project_id=payload.project_id,
@@ -389,9 +413,7 @@ def pull_mobile_lot_geometries(
         current_user=current_user,
     )
 
-    query = db.query(LotGeometry).filter(
-        LotGeometry.project_id == project_id
-    )
+    query = db.query(LotGeometry).filter(LotGeometry.project_id == project_id)
 
     if not include_history:
         query = query.filter(LotGeometry.is_current.is_(True))
@@ -399,11 +421,7 @@ def pull_mobile_lot_geometries(
     if since is not None:
         query = query.filter(LotGeometry.updated_at > since)
 
-    records = (
-        query.order_by(LotGeometry.updated_at.asc())
-        .limit(limit)
-        .all()
-    )
+    records = query.order_by(LotGeometry.updated_at.asc()).limit(limit).all()
 
     now = _utcnow()
     next_cursor = records[-1].updated_at if records else (since or now)
@@ -436,9 +454,7 @@ def list_project_lot_geometries(
         current_user=current_user,
     )
 
-    query = db.query(LotGeometry).filter(
-        LotGeometry.project_id == project_id
-    )
+    query = db.query(LotGeometry).filter(LotGeometry.project_id == project_id)
 
     if not include_history:
         query = query.filter(LotGeometry.is_current.is_(True))
@@ -450,9 +466,7 @@ def list_project_lot_geometries(
         query = query.filter(LotGeometry.origin == origin)
 
     if workflow_status is not None:
-        query = query.filter(
-            LotGeometry.workflow_status == workflow_status
-        )
+        query = query.filter(LotGeometry.workflow_status == workflow_status)
 
     records = (
         query.order_by(
