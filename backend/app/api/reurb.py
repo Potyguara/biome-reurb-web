@@ -48,6 +48,7 @@ from app.schemas.reurb import (
     PhysicalRegistrationUpdateRequest,
     ProjectDashboardResponse,
     ProjectMapLotResponse,
+    ProjectMapLotGeometryResponse,
     ProjectMapPhysicalResponse,
     ProjectMapProjectResponse,
     ProjectMapResponse,
@@ -1974,16 +1975,6 @@ def get_project_map(
             .first()
         )
 
-        seal = (
-            db.query(Seal)
-            .filter(
-                Seal.project_id == project_id,
-                Seal.lot_id == lot.id,
-            )
-            .order_by(Seal.created_at.asc())
-            .first()
-        )
-
         social = None
         physical = None
         documents_count = 0
@@ -2121,7 +2112,56 @@ def get_project_map(
                 pending_flags=pending_flags,
             )
         )
+    lot_geometry_items = (
+        db.query(LotGeometry)
+        .filter(
+            LotGeometry.project_id == project_id,
+            LotGeometry.is_current.is_(True),
+            LotGeometry.deleted.is_(False),
+        )
+        .order_by(LotGeometry.created_at.asc())
+        .all()
+    )
 
+    lot_geometries = [
+        ProjectMapLotGeometryResponse(
+            id=str(item.id),
+            project_id=str(item.project_id),
+            lot_id=str(item.lot_id) if item.lot_id else None,
+            seal_id=str(item.seal_id) if item.seal_id else None,
+            social_registration_id=(
+                str(item.social_registration_id)
+                if item.social_registration_id
+                else None
+            ),
+            source_local_id=str(item.source_local_id),
+            source_device_id=str(item.source_device_id),
+            origin=item.origin,
+            workflow_status=item.workflow_status,
+            geometry_type=item.geometry_type,
+            geometry_geojson=item.geometry_geojson,
+            area_m2=item.area_m2,
+            perimeter_m=item.perimeter_m,
+            geospatial_accuracy_m=item.geospatial_accuracy_m,
+            notes=item.notes,
+            validation_note=item.validation_note,
+            version=item.version,
+            is_current=item.is_current,
+            deleted=item.deleted,
+            client_created_at=(
+                item.client_created_at.isoformat() if item.client_created_at else None
+            ),
+            client_updated_at=(
+                item.client_updated_at.isoformat() if item.client_updated_at else None
+            ),
+            server_received_at=(
+                item.server_received_at.isoformat() if item.server_received_at else None
+            ),
+            created_at=(item.created_at.isoformat() if item.created_at else None),
+            updated_at=(item.updated_at.isoformat() if item.updated_at else None),
+        )
+        for item in lot_geometry_items
+    ]
     seals_without_lot_items = (
         db.query(Seal)
         .filter(
@@ -2165,6 +2205,7 @@ def get_project_map(
             seals_without_lot=len(seals_without_lot),
         ),
         lots=result_lots,
+        lot_geometries=lot_geometries,
         seals_without_lot=seals_without_lot,
     )
 

@@ -274,10 +274,46 @@ class ProjectMapProjectResponse(BaseModel):
     status: str
 
 
+class ProjectMapLotGeometryResponse(BaseModel):
+    id: str
+    project_id: str
+
+    lot_id: str | None = None
+    seal_id: str | None = None
+    social_registration_id: str | None = None
+
+    source_local_id: str
+    source_device_id: str
+
+    origin: str
+    workflow_status: str
+
+    geometry_type: str
+    geometry_geojson: dict | None = None
+
+    area_m2: float | None = None
+    perimeter_m: float | None = None
+    geospatial_accuracy_m: float | None = None
+
+    notes: str | None = None
+    validation_note: str | None = None
+
+    version: int
+    is_current: bool
+    deleted: bool
+
+    client_created_at: str | None = None
+    client_updated_at: str | None = None
+    server_received_at: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
 class ProjectMapResponse(BaseModel):
     project: ProjectMapProjectResponse
     summary: ProjectMapSummaryResponse
     lots: list[ProjectMapLotResponse]
+    lot_geometries: list[ProjectMapLotGeometryResponse]
     seals_without_lot: list[ProjectMapSealWithoutLotResponse]
 
 
