@@ -39,6 +39,8 @@ type MapData = {
     seals_without_lot: number;
   };
   lots: LotMapItem[];
+  lot_geometries: LotGeometryMapItem[];
+
   seals_without_lot: Array<{
     id: string;
     seal_code: string;
@@ -120,6 +122,41 @@ type GeoJsonGeometry = {
   coordinates: unknown;
 };
 
+type LotGeometryMapItem = {
+  id: string;
+  project_id: string;
+
+  lot_id: string | null;
+  seal_id: string | null;
+  social_registration_id: string | null;
+
+  source_local_id: string;
+  source_device_id: string;
+
+  origin: string;
+  workflow_status: string;
+
+  geometry_type: string;
+  geometry_geojson: GeoJsonGeometry | null;
+
+  area_m2: number | null;
+  perimeter_m: number | null;
+  geospatial_accuracy_m: number | null;
+
+  notes: string | null;
+  validation_note: string | null;
+
+  version: number;
+  is_current: boolean;
+  deleted: boolean;
+
+  client_created_at: string | null;
+  client_updated_at: string | null;
+  server_received_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
 type ProjectOrthomosaic = {
   id: string;
   project_id: string;
@@ -140,8 +177,6 @@ type ProjectOrthomosaic = {
 };
 
 type LeafletModule = typeof import("leaflet");
-
-
 
 function formatNumber(value: number | null | undefined) {
   if (value === null || value === undefined) return "-";
@@ -200,7 +235,12 @@ function getLotPoint(lot: LotMapItem): [number, number] | null {
     return [lot.centroid_latitude, lot.centroid_longitude];
   }
 
-  if (lot.seal?.latitude !== null && lot.seal?.latitude !== undefined && lot.seal?.longitude !== null && lot.seal?.longitude !== undefined) {
+  if (
+    lot.seal?.latitude !== null &&
+    lot.seal?.latitude !== undefined &&
+    lot.seal?.longitude !== null &&
+    lot.seal?.longitude !== undefined
+  ) {
     return [lot.seal.latitude, lot.seal.longitude];
   }
 
@@ -214,12 +254,20 @@ export default function ProjectCoreMapPage() {
   const projectId = params.id;
 
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
-const mapRef = useRef<import("leaflet").Map | null>(null);
-const layerRef = useRef<import("leaflet").LayerGroup | null>(null);
-const orthomosaicLayerRef = useRef<import("leaflet").ImageOverlay | null>(null);
-const layersControlCreatedRef = useRef(false);
 
+  const mapRef = useRef<import("leaflet").Map | null>(null);
 
+  const layerRef = useRef<import("leaflet").LayerGroup | null>(null);
+
+  const citizenGeometryLayerRef = useRef<import("leaflet").LayerGroup | null>(
+    null,
+  );
+
+  const orthomosaicLayerRef = useRef<import("leaflet").ImageOverlay | null>(
+    null,
+  );
+
+  const layersControlCreatedRef = useRef(false);
 
   const [data, setData] = useState<MapData | null>(null);
   const [selectedLot, setSelectedLot] = useState<LotMapItem | null>(null);
@@ -228,21 +276,29 @@ const layersControlCreatedRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
 
   const [geospatialFile, setGeospatialFile] = useState<File | null>(null);
-const [importingGeospatial, setImportingGeospatial] = useState(false);
-const [geospatialMessage, setGeospatialMessage] = useState<string | null>(null);
+  const [importingGeospatial, setImportingGeospatial] = useState(false);
+  const [geospatialMessage, setGeospatialMessage] = useState<string | null>(
+    null,
+  );
 
-const [orthomosaic, setOrthomosaic] = useState<ProjectOrthomosaic | null>(null);
-const [orthomosaicFile, setOrthomosaicFile] = useState<File | null>(null);
-const [orthomosaicBlobUrl, setOrthomosaicBlobUrl] = useState<string | null>(null);
-const [importingOrthomosaic, setImportingOrthomosaic] = useState(false);
-const [orthomosaicMessage, setOrthomosaicMessage] = useState<string | null>(null);
-const [showOrthomosaic, setShowOrthomosaic] = useState(true);
+  const [orthomosaic, setOrthomosaic] = useState<ProjectOrthomosaic | null>(
+    null,
+  );
+  const [orthomosaicFile, setOrthomosaicFile] = useState<File | null>(null);
+  const [orthomosaicBlobUrl, setOrthomosaicBlobUrl] = useState<string | null>(
+    null,
+  );
+  const [importingOrthomosaic, setImportingOrthomosaic] = useState(false);
+  const [orthomosaicMessage, setOrthomosaicMessage] = useState<string | null>(
+    null,
+  );
+  const [showOrthomosaic, setShowOrthomosaic] = useState(true);
 
-const [orthomosaics, setOrthomosaics] = useState<ProjectOrthomosaic[]>([]);
-const [loadingOrthomosaics, setLoadingOrthomosaics] = useState(false);
-const [orthomosaicActionId, setOrthomosaicActionId] = useState<string | null>(
-  null,
-);
+  const [orthomosaics, setOrthomosaics] = useState<ProjectOrthomosaic[]>([]);
+  const [loadingOrthomosaics, setLoadingOrthomosaics] = useState(false);
+  const [orthomosaicActionId, setOrthomosaicActionId] = useState<string | null>(
+    null,
+  );
 
   async function loadData() {
     try {
@@ -271,68 +327,68 @@ const [orthomosaicActionId, setOrthomosaicActionId] = useState<string | null>(
   }
 
   async function loadOrthomosaic() {
-  try {
-const response = await api.get<ProjectOrthomosaic | null>(
-  `/projects/${projectId}/orthomosaic`,
-);
+    try {
+      const response = await api.get<ProjectOrthomosaic | null>(
+        `/projects/${projectId}/orthomosaic`,
+      );
 
-    const item = response.data;
+      const item = response.data;
 
-    setOrthomosaic(item);
+      setOrthomosaic(item);
 
-    if (!item) {
+      if (!item) {
+        setOrthomosaicBlobUrl((current) => {
+          if (current) URL.revokeObjectURL(current);
+          return null;
+        });
+
+        return;
+      }
+
+      const previewResponse = await api.get(
+        `/projects/${projectId}/orthomosaic/${item.id}/preview.png`,
+        {
+          responseType: "blob",
+        },
+      );
+
+      const blob = new Blob([previewResponse.data], {
+        type: "image/png",
+      });
+
+      const nextUrl = URL.createObjectURL(blob);
+
+      setOrthomosaicBlobUrl((current) => {
+        if (current) URL.revokeObjectURL(current);
+        return nextUrl;
+      });
+    } catch (err) {
+      console.error(err);
+      setOrthomosaic(null);
+
       setOrthomosaicBlobUrl((current) => {
         if (current) URL.revokeObjectURL(current);
         return null;
       });
-
-      return;
     }
-
-    const previewResponse = await api.get(
-      `/projects/${projectId}/orthomosaic/${item.id}/preview.png`,
-      {
-        responseType: "blob",
-      },
-    );
-
-    const blob = new Blob([previewResponse.data], {
-      type: "image/png",
-    });
-
-    const nextUrl = URL.createObjectURL(blob);
-
-    setOrthomosaicBlobUrl((current) => {
-      if (current) URL.revokeObjectURL(current);
-      return nextUrl;
-    });
-  } catch (err) {
-    console.error(err);
-    setOrthomosaic(null);
-
-    setOrthomosaicBlobUrl((current) => {
-      if (current) URL.revokeObjectURL(current);
-      return null;
-    });
   }
-}
 
-async function loadOrthomosaics() {
-  try {
-    setLoadingOrthomosaics(true);
+  async function loadOrthomosaics() {
+    try {
+      setLoadingOrthomosaics(true);
 
-    const response = await api.get<ProjectOrthomosaic[]>(
-      `/projects/${projectId}/orthomosaics`,
-    );
+      const response = await api.get<ProjectOrthomosaic[]>(
+        `/projects/${projectId}/orthomosaics`,
+      );
 
-    setOrthomosaics(response.data ?? []);
-  } catch (err) {
-    console.error(err);
-    setError("Não foi possível carregar os ortomosaicos do projeto.");
-  } finally {
-    setLoadingOrthomosaics(false);
+      setOrthomosaics(response.data ?? []);
+    } catch (err) {
+      console.error(err);
+      setError("Não foi possível carregar os ortomosaicos do projeto.");
+    } finally {
+      setLoadingOrthomosaics(false);
+    }
   }
-}
 
   async function updateLotStatus(
     lot: LotMapItem,
@@ -359,205 +415,207 @@ async function loadOrthomosaics() {
   }
 
   async function importGeospatialLots() {
-  if (!geospatialFile) {
-    alert("Selecione um arquivo .kml, .geojson, .json ou .zip com Shapefile.");
-    return;
-  }
+    if (!geospatialFile) {
+      alert(
+        "Selecione um arquivo .kml, .geojson, .json ou .zip com Shapefile.",
+      );
+      return;
+    }
 
-  try {
-    setImportingGeospatial(true);
-    setGeospatialMessage(null);
-    setError(null);
+    try {
+      setImportingGeospatial(true);
+      setGeospatialMessage(null);
+      setError(null);
 
-    const formData = new FormData();
-    formData.append("file", geospatialFile);
+      const formData = new FormData();
+      formData.append("file", geospatialFile);
 
-    const response = await api.post(
-      `/projects/${projectId}/geospatial/lots/import`,
-      formData,
-      {
-        headers: {
-          "Content-Type": "multipart/form-data",
+      const response = await api.post(
+        `/projects/${projectId}/geospatial/lots/import`,
+        formData,
+        {
+          headers: {
+            "Content-Type": "multipart/form-data",
+          },
         },
-      },
-    );
+      );
 
-    const result = response.data;
+      const result = response.data;
 
-    setGeospatialMessage(
-      `Importação concluída: ${result.created ?? 0} lote(s) criado(s), ${
-        result.updated ?? 0
-      } atualizado(s), ${result.ignored ?? 0} ignorado(s).`,
-    );
+      setGeospatialMessage(
+        `Importação concluída: ${result.created ?? 0} lote(s) criado(s), ${
+          result.updated ?? 0
+        } atualizado(s), ${result.ignored ?? 0} ignorado(s).`,
+      );
 
-    setGeospatialFile(null);
+      setGeospatialFile(null);
 
-    await loadData();
-  } catch (err: unknown) {
-    console.error(err);
+      await loadData();
+    } catch (err: unknown) {
+      console.error(err);
 
-    let message = "Erro ao importar arquivo geoespacial.";
+      let message = "Erro ao importar arquivo geoespacial.";
 
-    if (
-      typeof err === "object" &&
-      err !== null &&
-      "response" in err
-    ) {
-      const axiosError = err as {
-        response?: {
-          data?: {
-            detail?: string;
+      if (typeof err === "object" && err !== null && "response" in err) {
+        const axiosError = err as {
+          response?: {
+            data?: {
+              detail?: string;
+            };
           };
         };
-      };
 
-      message = axiosError.response?.data?.detail ?? message;
+        message = axiosError.response?.data?.detail ?? message;
+      }
+
+      setError(message);
+    } finally {
+      setImportingGeospatial(false);
+    }
+  }
+
+  async function importOrthomosaic() {
+    if (!orthomosaicFile) {
+      alert(
+        "Selecione um arquivo GeoTIFF do ortomosaico: .tif, .tiff ou .geotiff.",
+      );
+      return;
     }
 
-    setError(message);
-  } finally {
-    setImportingGeospatial(false);
-  }
-}
+    try {
+      setImportingOrthomosaic(true);
+      setOrthomosaicMessage(null);
+      setError(null);
 
-async function importOrthomosaic() {
-  if (!orthomosaicFile) {
-    alert("Selecione um arquivo GeoTIFF do ortomosaico: .tif, .tiff ou .geotiff.");
-    return;
-  }
+      const formData = new FormData();
+      formData.append("file", orthomosaicFile);
 
-  try {
-    setImportingOrthomosaic(true);
-    setOrthomosaicMessage(null);
-    setError(null);
-
-    const formData = new FormData();
-    formData.append("file", orthomosaicFile);
-
-    const response = await api.post(
-      `/projects/${projectId}/orthomosaic/upload`,
-      formData,
-      {
-        headers: {
-          "Content-Type": "multipart/form-data",
+      const response = await api.post(
+        `/projects/${projectId}/orthomosaic/upload`,
+        formData,
+        {
+          headers: {
+            "Content-Type": "multipart/form-data",
+          },
         },
-      },
-    );
+      );
 
-    const result = response.data;
+      const result = response.data;
 
-    setOrthomosaicMessage(
-      result.message ?? "Ortomosaico importado com sucesso.",
-    );
+      setOrthomosaicMessage(
+        result.message ?? "Ortomosaico importado com sucesso.",
+      );
 
-    setOrthomosaicFile(null);
-    setShowOrthomosaic(true);
+      setOrthomosaicFile(null);
+      setShowOrthomosaic(true);
 
-    await loadOrthomosaic();
-await loadOrthomosaics();
-  } catch (err: unknown) {
-    let message = "Erro ao importar ortomosaico.";
+      await loadOrthomosaic();
+      await loadOrthomosaics();
+    } catch (err: unknown) {
+      let message = "Erro ao importar ortomosaico.";
 
-    if (typeof err === "object" && err !== null && "response" in err) {
-      const axiosError = err as {
-        response?: {
-          data?: {
-            detail?: string;
+      if (typeof err === "object" && err !== null && "response" in err) {
+        const axiosError = err as {
+          response?: {
+            data?: {
+              detail?: string;
+            };
           };
         };
-      };
 
-      message = axiosError.response?.data?.detail ?? message;
+        message = axiosError.response?.data?.detail ?? message;
+      }
+
+      setError(message);
+    } finally {
+      setImportingOrthomosaic(false);
     }
-
-    setError(message);
-  } finally {
-    setImportingOrthomosaic(false);
   }
-}
 
-async function activateOrthomosaic(orthomosaicId: string) {
-  try {
-    setOrthomosaicActionId(orthomosaicId);
-    setError(null);
-    setOrthomosaicMessage(null);
+  async function activateOrthomosaic(orthomosaicId: string) {
+    try {
+      setOrthomosaicActionId(orthomosaicId);
+      setError(null);
+      setOrthomosaicMessage(null);
 
-    await api.patch(
-      `/projects/${projectId}/orthomosaics/${orthomosaicId}/activate`,
+      await api.patch(
+        `/projects/${projectId}/orthomosaics/${orthomosaicId}/activate`,
+      );
+
+      setShowOrthomosaic(true);
+
+      await loadOrthomosaic();
+      await loadOrthomosaics();
+      await loadData();
+
+      setOrthomosaicMessage("Ortomosaico definido como ativo.");
+    } catch (err) {
+      console.error(err);
+      setError("Não foi possível ativar o ortomosaico selecionado.");
+    } finally {
+      setOrthomosaicActionId(null);
+    }
+  }
+
+  async function deleteOrthomosaic(item: ProjectOrthomosaic) {
+    const confirmed = window.confirm(
+      `Deseja excluir o ortomosaico "${item.original_filename}"?\n\nEssa ação apagará o registro e os arquivos gerados no backend.`,
     );
 
-    setShowOrthomosaic(true);
+    if (!confirmed) return;
 
-    await loadOrthomosaic();
-    await loadOrthomosaics();
-    await loadData();
+    try {
+      setOrthomosaicActionId(item.id);
+      setError(null);
+      setOrthomosaicMessage(null);
 
-    setOrthomosaicMessage("Ortomosaico definido como ativo.");
-  } catch (err) {
-    console.error(err);
-    setError("Não foi possível ativar o ortomosaico selecionado.");
-  } finally {
-    setOrthomosaicActionId(null);
-  }
-}
+      await api.delete(`/projects/${projectId}/orthomosaics/${item.id}`);
 
-async function deleteOrthomosaic(item: ProjectOrthomosaic) {
-  const confirmed = window.confirm(
-    `Deseja excluir o ortomosaico "${item.original_filename}"?\n\nEssa ação apagará o registro e os arquivos gerados no backend.`,
-  );
+      await loadOrthomosaic();
+      await loadOrthomosaics();
+      await loadData();
 
-  if (!confirmed) return;
-
-  try {
-    setOrthomosaicActionId(item.id);
-    setError(null);
-    setOrthomosaicMessage(null);
-
-    await api.delete(`/projects/${projectId}/orthomosaics/${item.id}`);
-
-    await loadOrthomosaic();
-    await loadOrthomosaics();
-    await loadData();
-
-    setOrthomosaicMessage("Ortomosaico excluído com sucesso.");
-  } catch (err) {
-    console.error(err);
-    setError("Não foi possível excluir o ortomosaico selecionado.");
-  } finally {
-    setOrthomosaicActionId(null);
-  }
-}
-
-useEffect(() => {
-  loadData();
-  loadOrthomosaic();
-  loadOrthomosaics();
-
-  return () => {
-    setOrthomosaicBlobUrl((current) => {
-      if (current) URL.revokeObjectURL(current);
-      return null;
-    });
-  };
-
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [projectId]);
-
-useEffect(() => {
-  return () => {
-    if (orthomosaicLayerRef.current) {
-      orthomosaicLayerRef.current.remove();
-      orthomosaicLayerRef.current = null;
+      setOrthomosaicMessage("Ortomosaico excluído com sucesso.");
+    } catch (err) {
+      console.error(err);
+      setError("Não foi possível excluir o ortomosaico selecionado.");
+    } finally {
+      setOrthomosaicActionId(null);
     }
+  }
 
-    if (mapRef.current) {
-      mapRef.current.remove();
-      mapRef.current = null;
-      layerRef.current = null;
-      layersControlCreatedRef.current = false;
-    }
-  };
-}, []);
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void loadData();
+      void loadOrthomosaic();
+      void loadOrthomosaics();
+    }, 0);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
+
+  useEffect(() => {
+    return () => {
+      if (orthomosaicLayerRef.current) {
+        orthomosaicLayerRef.current.remove();
+        orthomosaicLayerRef.current = null;
+      }
+
+      if (mapRef.current) {
+        mapRef.current.remove();
+        mapRef.current = null;
+
+        layerRef.current = null;
+        citizenGeometryLayerRef.current = null;
+
+        layersControlCreatedRef.current = false;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!data || !mapContainerRef.current) return;
@@ -578,106 +636,125 @@ useEffect(() => {
           preferCanvas: true,
         });
 
-const claroTecnico = L.tileLayer(
-  "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
-  {
-    subdomains: "abcd",
-    maxZoom: 22,
-    attribution: "&copy; OpenStreetMap &copy; CARTO",
-  },
-);
+        const claroTecnico = L.tileLayer(
+          "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
+          {
+            subdomains: "abcd",
+            maxZoom: 22,
+            attribution: "&copy; OpenStreetMap &copy; CARTO",
+          },
+        );
 
-const mapaPadrao = L.tileLayer(
-  "https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png",
-  {
-    subdomains: "abc",
-    maxZoom: 20,
-    attribution: "&copy; OpenStreetMap Humanitarian",
-  },
-);
+        const mapaPadrao = L.tileLayer(
+          "https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png",
+          {
+            subdomains: "abc",
+            maxZoom: 20,
+            attribution: "&copy; OpenStreetMap Humanitarian",
+          },
+        );
 
-const satelite = L.tileLayer(
-  "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-  {
-    maxZoom: 22,
-    attribution: "Tiles &copy; Esri",
-  },
-);
+        const satelite = L.tileLayer(
+          "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+          {
+            maxZoom: 22,
+            attribution: "Tiles &copy; Esri",
+          },
+        );
 
-const hibridoReferencia = L.tileLayer(
-  "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",
-  {
-    maxZoom: 22,
-    attribution: "Labels &copy; Esri",
-  },
-);
+        const hibridoReferencia = L.tileLayer(
+          "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",
+          {
+            maxZoom: 22,
+            attribution: "Labels &copy; Esri",
+          },
+        );
 
-claroTecnico.addTo(mapRef.current);
+        claroTecnico.addTo(mapRef.current);
+
+        /*
+         * Camada da geometria técnica/oficial.
+         *
+         * Aqui permanecem os lotes provenientes da base cartográfica,
+         * importações georreferenciadas e geometrias consolidadas no
+         * cadastro principal de lotes.
+         */
+        layerRef.current = L.layerGroup().addTo(mapRef.current);
+
+        /*
+         * Camada independente das geometrias produzidas durante
+         * a vetorização assistida realizada pelo cidadão/morador.
+         *
+         * Ela não substitui a geometria técnica do lote.
+         */
+        citizenGeometryLayerRef.current = L.layerGroup().addTo(mapRef.current);
 
         if (!layersControlCreatedRef.current) {
-L.control
-  .layers(
-    {
-      "Claro técnico": claroTecnico,
-      "Mapa padrão": mapaPadrao,
-      "Satélite": satelite,
-    },
-    {
-      "Referências / nomes": hibridoReferencia,
-    },
-    {
-      collapsed: false,
-      position: "topright",
-    },
-  )
-  .addTo(mapRef.current);
+          L.control
+            .layers(
+              {
+                "Claro técnico": claroTecnico,
+                "Mapa padrão": mapaPadrao,
+                Satélite: satelite,
+              },
+              {
+                "Lotes técnicos / base cartográfica": layerRef.current,
+                "Vetorização do cidadão": citizenGeometryLayerRef.current,
+                "Referências / nomes": hibridoReferencia,
+              },
+              {
+                collapsed: false,
+                position: "topright",
+              },
+            )
+            .addTo(mapRef.current);
 
           layersControlCreatedRef.current = true;
         }
-
-        layerRef.current = L.layerGroup().addTo(mapRef.current);
       }
 
       const map = mapRef.current;
       const layer = layerRef.current;
+      const citizenLayer = citizenGeometryLayerRef.current;
 
-      if (!map || !layer) return;
+      if (!map || !layer || !citizenLayer) return;
 
       layer.clearLayers();
+      citizenLayer.clearLayers();
 
       const bounds = L.latLngBounds([]);
 
       if (orthomosaicLayerRef.current) {
-  orthomosaicLayerRef.current.remove();
-  orthomosaicLayerRef.current = null;
-}
+        orthomosaicLayerRef.current.remove();
+        orthomosaicLayerRef.current = null;
+      }
 
-if (
-  showOrthomosaic &&
-  orthomosaic &&
-  orthomosaicBlobUrl &&
-  orthomosaic.min_lat !== null &&
-  orthomosaic.min_lon !== null &&
-  orthomosaic.max_lat !== null &&
-  orthomosaic.max_lon !== null
-) {
-  const imageBounds: L.LatLngBoundsExpression = [
-    [orthomosaic.min_lat, orthomosaic.min_lon],
-    [orthomosaic.max_lat, orthomosaic.max_lon],
-  ];
+      if (
+        showOrthomosaic &&
+        orthomosaic &&
+        orthomosaicBlobUrl &&
+        orthomosaic.min_lat !== null &&
+        orthomosaic.min_lon !== null &&
+        orthomosaic.max_lat !== null &&
+        orthomosaic.max_lon !== null
+      ) {
+        const imageBounds: L.LatLngBoundsExpression = [
+          [orthomosaic.min_lat, orthomosaic.min_lon],
+          [orthomosaic.max_lat, orthomosaic.max_lon],
+        ];
 
-  const overlay = L.imageOverlay(orthomosaicBlobUrl, imageBounds, {
-    opacity: 0.85,
-    interactive: false,
-  });
+        const overlay = L.imageOverlay(orthomosaicBlobUrl, imageBounds, {
+          opacity: 0.85,
+          interactive: false,
+        });
 
-  overlay.addTo(map);
-  overlay.bringToBack();
+        overlay.addTo(map);
+        overlay.bringToBack();
 
-  orthomosaicLayerRef.current = overlay;
+        orthomosaicLayerRef.current = overlay;
 
-  bounds.extend(imageBounds);
-}
+        bounds.extend(imageBounds);
+      }
 
       for (const lot of mapData.lots) {
         const color = statusColor(lot.lot_review_status);
@@ -729,7 +806,12 @@ if (
 
         const seal = lot.seal;
 
-        if (seal?.latitude !== null && seal?.latitude !== undefined && seal?.longitude !== null && seal?.longitude !== undefined) {
+        if (
+          seal?.latitude !== null &&
+          seal?.latitude !== undefined &&
+          seal?.longitude !== null &&
+          seal?.longitude !== undefined
+        ) {
           const sealPoint: [number, number] = [seal.latitude, seal.longitude];
 
           const sealMarker = L.circleMarker(sealPoint, {
@@ -745,6 +827,146 @@ if (
           sealMarker.addTo(layer);
 
           bounds.extend(sealPoint);
+        }
+      }
+
+      /*
+       * ============================================================
+       * VETORIZAÇÕES PRODUZIDAS PELO CIDADÃO / MORADOR
+       * ============================================================
+       *
+       * Essas geometrias permanecem independentes dos lotes oficiais.
+       * Isso permite ao analista comparar:
+       *
+       *   - geometria técnica/base cartográfica;
+       *   - geometria desenhada em campo pelo cidadão;
+       *
+       * sem sobrescrever nenhuma das duas.
+       */
+      for (const geometry of mapData.lot_geometries ?? []) {
+        if (geometry.deleted || !geometry.is_current) {
+          continue;
+        }
+
+        if (geometry.origin !== "cidadao_vetorizado") {
+          continue;
+        }
+
+        if (!geometry.geometry_geojson) {
+          continue;
+        }
+
+        const latLngs = polygonToLatLngs(geometry.geometry_geojson);
+
+        if (!Array.isArray(latLngs) || latLngs.length === 0) {
+          continue;
+        }
+
+        const polygon = L.polygon(
+          latLngs as L.LatLngExpression[][] | L.LatLngExpression[][][],
+          {
+            /*
+             * Magenta/roxo para não confundir com:
+             *
+             * azul   = lote preliminar/técnico
+             * verde  = apto
+             * amarelo = revisão
+             * vermelho = inconsistência
+             */
+            color: "#9333ea",
+            weight: 4,
+
+            fillColor: "#c084fc",
+            fillOpacity: 0.16,
+
+            /*
+             * Linha tracejada deixa visualmente claro que esta
+             * ainda não é a geometria técnica consolidada.
+             */
+            dashArray: "10 7",
+          },
+        );
+
+        const area =
+          geometry.area_m2 !== null
+            ? `${formatNumber(geometry.area_m2)} m²`
+            : "Área não informada";
+
+        const perimeter =
+          geometry.perimeter_m !== null
+            ? `${formatNumber(geometry.perimeter_m)} m`
+            : "Perímetro não informado";
+
+        const status = normalizeLabel(geometry.workflow_status);
+
+        polygon.bindTooltip(
+          [
+            "<strong>Vetorização do cidadão</strong>",
+            `Status: ${status}`,
+            `Área: ${area}`,
+            `Perímetro: ${perimeter}`,
+          ].join("<br />"),
+          {
+            sticky: true,
+            direction: "top",
+          },
+        );
+
+        polygon.bindPopup(
+          `
+      <div style="min-width:220px">
+        <strong style="font-size:14px">
+          Vetorização do cidadão
+        </strong>
+
+        <div style="margin-top:8px">
+          <strong>Status:</strong> ${status}
+        </div>
+
+        <div>
+          <strong>Área:</strong> ${area}
+        </div>
+
+        <div>
+          <strong>Perímetro:</strong> ${perimeter}
+        </div>
+
+        <div>
+          <strong>Origem:</strong>
+          ${normalizeLabel(geometry.origin)}
+        </div>
+
+        ${
+          geometry.geospatial_accuracy_m !== null
+            ? `
+              <div>
+                <strong>Precisão:</strong>
+                ${formatNumber(geometry.geospatial_accuracy_m)} m
+              </div>
+            `
+            : ""
+        }
+
+        ${
+          geometry.validation_note
+            ? `
+              <div style="margin-top:6px">
+                <strong>Observação:</strong>
+                ${geometry.validation_note}
+              </div>
+            `
+            : ""
+        }
+      </div>
+    `,
+        );
+
+        polygon.addTo(citizenLayer);
+
+        const polygonBounds = polygon.getBounds();
+
+        if (polygonBounds.isValid()) {
+          bounds.extend(polygonBounds);
         }
       }
 
@@ -790,7 +1012,7 @@ if (
     return () => {
       cancelled = true;
     };
- }, [data, selectedLot, orthomosaic, orthomosaicBlobUrl, showOrthomosaic]);
+  }, [data, selectedLot, orthomosaic, orthomosaicBlobUrl, showOrthomosaic]);
 
   const filteredStatus = useMemo(() => {
     if (!data) return [];
@@ -819,372 +1041,372 @@ if (
     ];
   }, [data]);
 
-return (
-  <main className="min-h-screen bg-slate-50 text-slate-950">
-    <section className="border-b border-slate-200 bg-white">
-      <div className="mx-auto flex max-w-7xl flex-col gap-6 px-6 py-6">
-        <button
-          type="button"
-          onClick={() => router.push(`/admin/projetos/${projectId}`)}
-          className="inline-flex w-fit items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          Voltar ao projeto
-        </button>
-
-        <div className="flex flex-col gap-5 md:flex-row md:items-end md:justify-between">
-          <div>
-            <p className="text-xs font-black uppercase tracking-[0.45em] text-green-700">
-              Mapa Núcleo REURB
-            </p>
-
-            <h1 className="mt-3 text-4xl font-black tracking-tight">
-              {data?.project.name ?? "Projeto REURB"}
-            </h1>
-
-            <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-              Visualização geral e individual dos lotes do núcleo. Esta tela é
-              usada para conferência, retificação e marcação dos lotes aptos
-              para planta e memorial descritivo.
-            </p>
-          </div>
-
+  return (
+    <main className="min-h-screen bg-slate-50 text-slate-950">
+      <section className="border-b border-slate-200 bg-white">
+        <div className="mx-auto flex max-w-7xl flex-col gap-6 px-6 py-6">
           <button
             type="button"
-            onClick={() => {
-              loadData();
-              loadOrthomosaic();
-              loadOrthomosaics();
-            }}
-            className="inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50"
+            onClick={() => router.push(`/admin/projetos/${projectId}`)}
+            className="inline-flex w-fit items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
           >
-            <RefreshCw className="h-4 w-4" />
-            Atualizar
+            <ArrowLeft className="h-4 w-4" />
+            Voltar ao projeto
           </button>
-        </div>
-      </div>
-    </section>
 
-    <section className="mx-auto max-w-7xl px-6 py-6">
-      {error && (
-        <div className="mb-6 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-700">
-          {error}
-        </div>
-      )}
+          <div className="flex flex-col gap-5 md:flex-row md:items-end md:justify-between">
+            <div>
+              <p className="text-xs font-black uppercase tracking-[0.45em] text-green-700">
+                Mapa Núcleo REURB
+              </p>
 
-      {loading && (
-        <div className="mb-6 flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4 text-sm font-bold text-slate-600">
-          <Loader2 className="h-5 w-5 animate-spin" />
-          Carregando mapa núcleo...
-        </div>
-      )}
+              <h1 className="mt-3 text-4xl font-black tracking-tight">
+                {data?.project.name ?? "Projeto REURB"}
+              </h1>
 
-      <div className="mb-6 grid gap-4 md:grid-cols-4">
-        {filteredStatus.map((item) => (
-          <div
-            key={item.label}
-            className="rounded-[1.5rem] border border-slate-200 bg-white p-5 shadow-sm"
-          >
-            <item.icon className="h-7 w-7 text-green-700" />
-            <p className="mt-4 text-sm font-bold text-slate-500">
-              {item.label}
-            </p>
-            <p className="mt-1 text-3xl font-black">{item.value}</p>
-          </div>
-        ))}
-      </div>
-
-      <div className="mb-6 rounded-[2rem] border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <div className="flex items-center gap-3">
-              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-green-50 text-green-800">
-                <UploadCloud className="h-6 w-6" />
-              </div>
-
-              <div>
-                <h2 className="text-lg font-black text-slate-950">
-                  Importar lotes georreferenciados
-                </h2>
-
-                <p className="mt-1 text-sm leading-6 text-slate-600">
-                  Envie KML, GeoJSON ou ZIP contendo Shapefile para vincular os
-                  polígonos aos lotes/selagens do projeto.
-                </p>
-              </div>
+              <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
+                Visualização geral e individual dos lotes do núcleo. Esta tela é
+                usada para conferência, retificação e marcação dos lotes aptos
+                para planta e memorial descritivo.
+              </p>
             </div>
-          </div>
-
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-            <label className="flex cursor-pointer items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-5 py-3 text-sm font-bold text-slate-700 transition hover:bg-slate-100">
-              <input
-                type="file"
-                accept=".kml,.geojson,.json,.zip,.shp"
-                className="hidden"
-                onChange={(event) => {
-                  const file = event.target.files?.[0] ?? null;
-                  setGeospatialFile(file);
-                  setGeospatialMessage(null);
-                }}
-              />
-
-              {geospatialFile ? geospatialFile.name : "Selecionar arquivo"}
-            </label>
 
             <button
               type="button"
-              disabled={!geospatialFile || importingGeospatial}
-              onClick={importGeospatialLots}
-              className="inline-flex items-center justify-center gap-2 rounded-2xl bg-green-800 px-5 py-3 text-sm font-black text-white shadow-sm transition hover:bg-green-900 disabled:cursor-not-allowed disabled:opacity-50"
+              onClick={() => {
+                loadData();
+                loadOrthomosaic();
+                loadOrthomosaics();
+              }}
+              className="inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50"
             >
-              {importingGeospatial ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <UploadCloud className="h-4 w-4" />
-              )}
-              Importar lotes
+              <RefreshCw className="h-4 w-4" />
+              Atualizar
             </button>
           </div>
         </div>
+      </section>
 
-        {geospatialMessage && (
-          <div className="mt-4 rounded-2xl border border-green-200 bg-green-50 p-4 text-sm font-bold text-green-800">
-            {geospatialMessage}
+      <section className="mx-auto max-w-7xl px-6 py-6">
+        {error && (
+          <div className="mb-6 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-700">
+            {error}
           </div>
         )}
-      </div>
 
-      <div className="mb-6 rounded-[2rem] border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <div className="flex items-center gap-3">
-              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-50 text-blue-800">
-                <MapPinned className="h-6 w-6" />
-              </div>
-
-              <div>
-                <h2 className="text-lg font-black text-slate-950">
-                  Importar ortomosaico drone
-                </h2>
-
-                <p className="mt-1 text-sm leading-6 text-slate-600">
-                  Envie um GeoTIFF/COG georreferenciado para exibir o
-                  ortomosaico como camada raster no mapa núcleo. O arquivo deve
-                  possuir CRS válido reconhecido pelo GDAL. Para Macapá/AP,
-                  recomenda-se SIRGAS 2000 EPSG:4674, SIRGAS 2000 / UTM 22N
-                  EPSG:31976, SIRGAS 2000 / UTM 22S EPSG:31982, WGS84
-                  EPSG:4326, WGS84 / UTM 22N EPSG:32622 ou WGS84 / UTM 22S
-                  EPSG:32722.
-                </p>
-
-                {orthomosaic && (
-                  <p className="mt-2 text-xs font-bold text-green-700">
-                    Ortomosaico ativo: {orthomosaic.original_filename} ·{" "}
-                    {orthomosaic.width ?? "-"} x {orthomosaic.height ?? "-"} px
-                  </p>
-                )}
-              </div>
-            </div>
-          </div>
-
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-            {orthomosaic && (
-              <label className="inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-700">
-                <input
-                  type="checkbox"
-                  checked={showOrthomosaic}
-                  onChange={(event) =>
-                    setShowOrthomosaic(event.target.checked)
-                  }
-                />
-                Mostrar ortomosaico
-              </label>
-            )}
-
-            <label className="flex cursor-pointer items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-5 py-3 text-sm font-bold text-slate-700 transition hover:bg-slate-100">
-              <input
-                type="file"
-                accept=".tif,.tiff,.geotiff"
-                className="hidden"
-                onChange={(event) => {
-                  const file = event.target.files?.[0] ?? null;
-                  setOrthomosaicFile(file);
-                  setOrthomosaicMessage(null);
-                }}
-              />
-
-              {orthomosaicFile ? orthomosaicFile.name : "Selecionar GeoTIFF"}
-            </label>
-
-            <button
-              type="button"
-              disabled={!orthomosaicFile || importingOrthomosaic}
-              onClick={importOrthomosaic}
-              className="inline-flex items-center justify-center gap-2 rounded-2xl bg-blue-800 px-5 py-3 text-sm font-black text-white shadow-sm transition hover:bg-blue-900 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {importingOrthomosaic ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <UploadCloud className="h-4 w-4" />
-              )}
-              Importar ortomosaico
-            </button>
-          </div>
-        </div>
-
-        {orthomosaicMessage && (
-          <div className="mt-4 rounded-2xl border border-green-200 bg-green-50 p-4 text-sm font-bold text-green-800">
-            {orthomosaicMessage}
-          </div>
-        )}
-      </div>
-
-      <div className="mb-6 rounded-[2rem] border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-          <div>
-            <h2 className="text-lg font-black text-slate-950">
-              Ortomosaicos importados
-            </h2>
-
-            <p className="mt-1 text-sm leading-6 text-slate-600">
-              Gerencie os ortomosaicos enviados para este projeto. Apenas um
-              ortomosaico fica ativo como camada raster no mapa núcleo.
-            </p>
-          </div>
-
-          <button
-            type="button"
-            onClick={loadOrthomosaics}
-            className="inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 transition hover:bg-slate-50"
-          >
-            <RefreshCw className="h-4 w-4" />
-            Atualizar lista
-          </button>
-        </div>
-
-        {loadingOrthomosaics ? (
-          <div className="mt-5 flex items-center gap-3 rounded-2xl bg-slate-50 p-4 text-sm font-bold text-slate-600">
+        {loading && (
+          <div className="mb-6 flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4 text-sm font-bold text-slate-600">
             <Loader2 className="h-5 w-5 animate-spin" />
-            Carregando ortomosaicos...
+            Carregando mapa núcleo...
           </div>
-        ) : orthomosaics.length === 0 ? (
-          <div className="mt-5 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-5 text-sm font-semibold text-slate-500">
-            Nenhum ortomosaico importado para este projeto.
-          </div>
-        ) : (
-          <div className="mt-5 grid gap-3">
-            {orthomosaics.map((item) => {
-              const busy = orthomosaicActionId === item.id;
+        )}
 
-              return (
-                <div
-                  key={item.id}
-                  className="grid gap-4 rounded-2xl border border-slate-100 bg-slate-50 p-4 md:grid-cols-[1fr_auto] md:items-center"
-                >
-                  <div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <p className="font-black text-slate-950">
-                        {item.original_filename}
+        <div className="mb-6 grid gap-4 md:grid-cols-4">
+          {filteredStatus.map((item) => (
+            <div
+              key={item.label}
+              className="rounded-[1.5rem] border border-slate-200 bg-white p-5 shadow-sm"
+            >
+              <item.icon className="h-7 w-7 text-green-700" />
+              <p className="mt-4 text-sm font-bold text-slate-500">
+                {item.label}
+              </p>
+              <p className="mt-1 text-3xl font-black">{item.value}</p>
+            </div>
+          ))}
+        </div>
+
+        <div className="mb-6 rounded-[2rem] border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <div className="flex items-center gap-3">
+                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-green-50 text-green-800">
+                  <UploadCloud className="h-6 w-6" />
+                </div>
+
+                <div>
+                  <h2 className="text-lg font-black text-slate-950">
+                    Importar lotes georreferenciados
+                  </h2>
+
+                  <p className="mt-1 text-sm leading-6 text-slate-600">
+                    Envie KML, GeoJSON ou ZIP contendo Shapefile para vincular
+                    os polígonos aos lotes/selagens do projeto.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+              <label className="flex cursor-pointer items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-5 py-3 text-sm font-bold text-slate-700 transition hover:bg-slate-100">
+                <input
+                  type="file"
+                  accept=".kml,.geojson,.json,.zip,.shp"
+                  className="hidden"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0] ?? null;
+                    setGeospatialFile(file);
+                    setGeospatialMessage(null);
+                  }}
+                />
+
+                {geospatialFile ? geospatialFile.name : "Selecionar arquivo"}
+              </label>
+
+              <button
+                type="button"
+                disabled={!geospatialFile || importingGeospatial}
+                onClick={importGeospatialLots}
+                className="inline-flex items-center justify-center gap-2 rounded-2xl bg-green-800 px-5 py-3 text-sm font-black text-white shadow-sm transition hover:bg-green-900 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {importingGeospatial ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <UploadCloud className="h-4 w-4" />
+                )}
+                Importar lotes
+              </button>
+            </div>
+          </div>
+
+          {geospatialMessage && (
+            <div className="mt-4 rounded-2xl border border-green-200 bg-green-50 p-4 text-sm font-bold text-green-800">
+              {geospatialMessage}
+            </div>
+          )}
+        </div>
+
+        <div className="mb-6 rounded-[2rem] border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <div className="flex items-center gap-3">
+                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-50 text-blue-800">
+                  <MapPinned className="h-6 w-6" />
+                </div>
+
+                <div>
+                  <h2 className="text-lg font-black text-slate-950">
+                    Importar ortomosaico drone
+                  </h2>
+
+                  <p className="mt-1 text-sm leading-6 text-slate-600">
+                    Envie um GeoTIFF/COG georreferenciado para exibir o
+                    ortomosaico como camada raster no mapa núcleo. O arquivo
+                    deve possuir CRS válido reconhecido pelo GDAL. Para
+                    Macapá/AP, recomenda-se SIRGAS 2000 EPSG:4674, SIRGAS 2000 /
+                    UTM 22N EPSG:31976, SIRGAS 2000 / UTM 22S EPSG:31982, WGS84
+                    EPSG:4326, WGS84 / UTM 22N EPSG:32622 ou WGS84 / UTM 22S
+                    EPSG:32722.
+                  </p>
+
+                  {orthomosaic && (
+                    <p className="mt-2 text-xs font-bold text-green-700">
+                      Ortomosaico ativo: {orthomosaic.original_filename} ·{" "}
+                      {orthomosaic.width ?? "-"} x {orthomosaic.height ?? "-"}{" "}
+                      px
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+              {orthomosaic && (
+                <label className="inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={showOrthomosaic}
+                    onChange={(event) =>
+                      setShowOrthomosaic(event.target.checked)
+                    }
+                  />
+                  Mostrar ortomosaico
+                </label>
+              )}
+
+              <label className="flex cursor-pointer items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-5 py-3 text-sm font-bold text-slate-700 transition hover:bg-slate-100">
+                <input
+                  type="file"
+                  accept=".tif,.tiff,.geotiff"
+                  className="hidden"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0] ?? null;
+                    setOrthomosaicFile(file);
+                    setOrthomosaicMessage(null);
+                  }}
+                />
+
+                {orthomosaicFile ? orthomosaicFile.name : "Selecionar GeoTIFF"}
+              </label>
+
+              <button
+                type="button"
+                disabled={!orthomosaicFile || importingOrthomosaic}
+                onClick={importOrthomosaic}
+                className="inline-flex items-center justify-center gap-2 rounded-2xl bg-blue-800 px-5 py-3 text-sm font-black text-white shadow-sm transition hover:bg-blue-900 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {importingOrthomosaic ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <UploadCloud className="h-4 w-4" />
+                )}
+                Importar ortomosaico
+              </button>
+            </div>
+          </div>
+
+          {orthomosaicMessage && (
+            <div className="mt-4 rounded-2xl border border-green-200 bg-green-50 p-4 text-sm font-bold text-green-800">
+              {orthomosaicMessage}
+            </div>
+          )}
+        </div>
+
+        <div className="mb-6 rounded-[2rem] border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+            <div>
+              <h2 className="text-lg font-black text-slate-950">
+                Ortomosaicos importados
+              </h2>
+
+              <p className="mt-1 text-sm leading-6 text-slate-600">
+                Gerencie os ortomosaicos enviados para este projeto. Apenas um
+                ortomosaico fica ativo como camada raster no mapa núcleo.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={loadOrthomosaics}
+              className="inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 transition hover:bg-slate-50"
+            >
+              <RefreshCw className="h-4 w-4" />
+              Atualizar lista
+            </button>
+          </div>
+
+          {loadingOrthomosaics ? (
+            <div className="mt-5 flex items-center gap-3 rounded-2xl bg-slate-50 p-4 text-sm font-bold text-slate-600">
+              <Loader2 className="h-5 w-5 animate-spin" />
+              Carregando ortomosaicos...
+            </div>
+          ) : orthomosaics.length === 0 ? (
+            <div className="mt-5 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-5 text-sm font-semibold text-slate-500">
+              Nenhum ortomosaico importado para este projeto.
+            </div>
+          ) : (
+            <div className="mt-5 grid gap-3">
+              {orthomosaics.map((item) => {
+                const busy = orthomosaicActionId === item.id;
+
+                return (
+                  <div
+                    key={item.id}
+                    className="grid gap-4 rounded-2xl border border-slate-100 bg-slate-50 p-4 md:grid-cols-[1fr_auto] md:items-center"
+                  >
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="font-black text-slate-950">
+                          {item.original_filename}
+                        </p>
+
+                        {item.is_active ? (
+                          <span className="rounded-full bg-green-100 px-3 py-1 text-xs font-black text-green-800">
+                            Ativo
+                          </span>
+                        ) : (
+                          <span className="rounded-full bg-slate-200 px-3 py-1 text-xs font-black text-slate-700">
+                            Inativo
+                          </span>
+                        )}
+                      </div>
+
+                      <p className="mt-2 text-xs font-semibold leading-5 text-slate-500">
+                        CRS: {item.crs || "-"} · Dimensão: {item.width || "-"} x{" "}
+                        {item.height || "-"} px · Enviado em:{" "}
+                        {item.created_at
+                          ? new Date(item.created_at).toLocaleString("pt-BR")
+                          : "-"}
                       </p>
 
-                      {item.is_active ? (
-                        <span className="rounded-full bg-green-100 px-3 py-1 text-xs font-black text-green-800">
-                          Ativo
-                        </span>
-                      ) : (
-                        <span className="rounded-full bg-slate-200 px-3 py-1 text-xs font-black text-slate-700">
-                          Inativo
-                        </span>
-                      )}
+                      <p className="mt-1 text-xs font-semibold leading-5 text-slate-500">
+                        BBOX: {item.min_lon ?? "-"}, {item.min_lat ?? "-"} /{" "}
+                        {item.max_lon ?? "-"}, {item.max_lat ?? "-"}
+                      </p>
                     </div>
 
-                    <p className="mt-2 text-xs font-semibold leading-5 text-slate-500">
-                      CRS: {item.crs || "-"} · Dimensão: {item.width || "-"} x{" "}
-                      {item.height || "-"} px · Enviado em:{" "}
-                      {item.created_at
-                        ? new Date(item.created_at).toLocaleString("pt-BR")
-                        : "-"}
-                    </p>
+                    <div className="flex flex-wrap gap-2 md:justify-end">
+                      {!item.is_active && (
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => activateOrthomosaic(item.id)}
+                          className="inline-flex items-center justify-center gap-2 rounded-2xl bg-blue-700 px-4 py-2 text-xs font-black text-white transition hover:bg-blue-800 disabled:opacity-60"
+                        >
+                          {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+                          Ativar
+                        </button>
+                      )}
 
-                    <p className="mt-1 text-xs font-semibold leading-5 text-slate-500">
-                      BBOX: {item.min_lon ?? "-"}, {item.min_lat ?? "-"} /{" "}
-                      {item.max_lon ?? "-"}, {item.max_lat ?? "-"}
-                    </p>
-                  </div>
-
-                  <div className="flex flex-wrap gap-2 md:justify-end">
-                    {!item.is_active && (
                       <button
                         type="button"
                         disabled={busy}
-                        onClick={() => activateOrthomosaic(item.id)}
-                        className="inline-flex items-center justify-center gap-2 rounded-2xl bg-blue-700 px-4 py-2 text-xs font-black text-white transition hover:bg-blue-800 disabled:opacity-60"
+                        onClick={() => deleteOrthomosaic(item)}
+                        className="inline-flex items-center justify-center gap-2 rounded-2xl border border-red-200 bg-white px-4 py-2 text-xs font-black text-red-700 transition hover:bg-red-50 disabled:opacity-60"
                       >
-                        {busy && (
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                        )}
-                        Ativar
+                        {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+                        Excluir
                       </button>
-                    )}
-
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => deleteOrthomosaic(item)}
-                      className="inline-flex items-center justify-center gap-2 rounded-2xl border border-red-200 bg-white px-4 py-2 text-xs font-black text-red-700 transition hover:bg-red-50 disabled:opacity-60"
-                    >
-                      {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-                      Excluir
-                    </button>
+                    </div>
                   </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <section className="rounded-[2rem] border border-slate-200 bg-white p-3 shadow-sm">
-          <div
-            ref={mapContainerRef}
-            style={{
-              height: "620px",
-              width: "100%",
-              borderRadius: "24px",
-              overflow: "hidden",
-              background: "#f1f5f9",
-            }}
-          />
-        </section>
-
-        <aside className="max-h-[620px] overflow-y-auto rounded-[2rem] border border-slate-200 bg-white p-6 shadow-sm">
-          {!selectedLot ? (
-            <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-10 text-center">
-              <MapPinned className="mx-auto h-12 w-12 text-slate-400" />
-
-              <h2 className="mt-4 text-lg font-black text-slate-800">
-                Nenhum lote selecionado
-              </h2>
-
-              <p className="mt-2 text-sm text-slate-500">
-                Clique em um lote ou ponto no mapa para visualizar os detalhes.
-              </p>
+                );
+              })}
             </div>
-          ) : (
-            <LotDetailsPanel
-              lot={selectedLot}
-              saving={savingStatus}
-              onStatusChange={(status) =>
-                updateLotStatus(selectedLot, status)
-              }
-            />
           )}
-        </aside>
-      </div>
-    </section>
-  </main>
-);
+        </div>
+
+        <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
+          <section className="rounded-[2rem] border border-slate-200 bg-white p-3 shadow-sm">
+            <div
+              ref={mapContainerRef}
+              style={{
+                height: "620px",
+                width: "100%",
+                borderRadius: "24px",
+                overflow: "hidden",
+                background: "#f1f5f9",
+              }}
+            />
+          </section>
+
+          <aside className="max-h-[620px] overflow-y-auto rounded-[2rem] border border-slate-200 bg-white p-6 shadow-sm">
+            {!selectedLot ? (
+              <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-10 text-center">
+                <MapPinned className="mx-auto h-12 w-12 text-slate-400" />
+
+                <h2 className="mt-4 text-lg font-black text-slate-800">
+                  Nenhum lote selecionado
+                </h2>
+
+                <p className="mt-2 text-sm text-slate-500">
+                  Clique em um lote ou ponto no mapa para visualizar os
+                  detalhes.
+                </p>
+              </div>
+            ) : (
+              <LotDetailsPanel
+                lot={selectedLot}
+                saving={savingStatus}
+                onStatusChange={(status) =>
+                  updateLotStatus(selectedLot, status)
+                }
+              />
+            )}
+          </aside>
+        </div>
+      </section>
+    </main>
+  );
 }
 
 function LotDetailsPanel({
@@ -1223,7 +1445,10 @@ function LotDetailsPanel({
 
       <div className="mt-6 grid gap-3 md:grid-cols-2">
         <InfoCard title="Área" value={`${formatNumber(lot.area_m2)} m²`} />
-        <InfoCard title="Perímetro" value={`${formatNumber(lot.perimeter_m)} m`} />
+        <InfoCard
+          title="Perímetro"
+          value={`${formatNumber(lot.perimeter_m)} m`}
+        />
         <InfoCard
           title="Geometria"
           value={hasGeometry(lot) ? "Disponível" : "Sem geometria"}
@@ -1325,7 +1550,9 @@ function LotDetailsPanel({
             </p>
             <p>
               Cômodos:{" "}
-              <span className="text-slate-950">{lot.physical.rooms ?? "-"}</span>
+              <span className="text-slate-950">
+                {lot.physical.rooms ?? "-"}
+              </span>
             </p>
             <p>
               Banheiros:{" "}
