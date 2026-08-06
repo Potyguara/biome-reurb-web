@@ -271,8 +271,12 @@ export default function ProjectCoreMapPage() {
 
   const [data, setData] = useState<MapData | null>(null);
   const [selectedLot, setSelectedLot] = useState<LotMapItem | null>(null);
+  const [selectedCitizenGeometry, setSelectedCitizenGeometry] =
+    useState<LotGeometryMapItem | null>(null);
   const [loading, setLoading] = useState(true);
   const [savingStatus, setSavingStatus] = useState(false);
+  const [savingCitizenGeometryLink, setSavingCitizenGeometryLink] =
+    useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [geospatialFile, setGeospatialFile] = useState<File | null>(null);
@@ -411,6 +415,58 @@ export default function ProjectCoreMapPage() {
       alert("Não foi possível atualizar o status técnico do lote.");
     } finally {
       setSavingStatus(false);
+    }
+  }
+
+  async function updateCitizenGeometryLink(
+    geometry: LotGeometryMapItem,
+    lotId: string | null,
+  ) {
+    try {
+      setSavingCitizenGeometryLink(true);
+      setError(null);
+
+      const response = await api.patch(
+        `/projects/${projectId}/lot-geometries/${geometry.id}/link`,
+        {
+          lot_id: lotId,
+        },
+      );
+
+      const updatedGeometry = response.data.geometry as LotGeometryMapItem;
+
+      setSelectedCitizenGeometry(updatedGeometry);
+
+      if (updatedGeometry.lot_id) {
+        const linkedLot =
+          data?.lots.find((lot) => lot.id === updatedGeometry.lot_id) ?? null;
+
+        setSelectedLot(linkedLot);
+      } else {
+        setSelectedLot(null);
+      }
+
+      await loadData();
+    } catch (err: unknown) {
+      console.error(err);
+
+      let message = "Não foi possível atualizar o vínculo da geometria.";
+
+      if (typeof err === "object" && err !== null && "response" in err) {
+        const axiosError = err as {
+          response?: {
+            data?: {
+              detail?: string;
+            };
+          };
+        };
+
+        message = axiosError.response?.data?.detail ?? message;
+      }
+
+      alert(message);
+    } finally {
+      setSavingCitizenGeometryLink(false);
     }
   }
 
@@ -758,15 +814,23 @@ export default function ProjectCoreMapPage() {
 
       for (const lot of mapData.lots) {
         const color = statusColor(lot.lot_review_status);
+        const isLinkedToSelectedCitizenGeometry =
+          selectedCitizenGeometry?.lot_id === lot.id;
 
         if (lot.geometry_geojson) {
           const polygon = L.polygon(
             polygonToLatLngs(lot.geometry_geojson) as L.LatLngExpression[][],
             {
               color,
-              weight: selectedLot?.id === lot.id ? 4 : 2,
+              weight:
+                isLinkedToSelectedCitizenGeometry || selectedLot?.id === lot.id
+                  ? 5
+                  : 2,
               fillColor: color,
-              fillOpacity: selectedLot?.id === lot.id ? 0.35 : 0.18,
+              fillOpacity:
+                isLinkedToSelectedCitizenGeometry || selectedLot?.id === lot.id
+                  ? 0.38
+                  : 0.18,
             },
           );
 
@@ -776,7 +840,10 @@ export default function ProjectCoreMapPage() {
             className: "lot-label",
           });
 
-          polygon.on("click", () => setSelectedLot(lot));
+          polygon.on("click", () => {
+            setSelectedCitizenGeometry(null);
+            setSelectedLot(lot);
+          });
           polygon.addTo(layer);
 
           bounds.extend(polygon.getBounds());
@@ -789,7 +856,10 @@ export default function ProjectCoreMapPage() {
               color,
               fillColor: color,
               fillOpacity: 0.85,
-              weight: selectedLot?.id === lot.id ? 4 : 2,
+              weight:
+                isLinkedToSelectedCitizenGeometry || selectedLot?.id === lot.id
+                  ? 5
+                  : 2,
             });
 
             marker.bindTooltip(`Lote ${lot.code}`, {
@@ -797,7 +867,10 @@ export default function ProjectCoreMapPage() {
               direction: "top",
             });
 
-            marker.on("click", () => setSelectedLot(lot));
+            marker.on("click", () => {
+              setSelectedCitizenGeometry(null);
+              setSelectedLot(lot);
+            });
             marker.addTo(layer);
 
             bounds.extend(point);
@@ -887,6 +960,19 @@ export default function ProjectCoreMapPage() {
           },
         );
 
+        polygon.on("click", () => {
+          setSelectedCitizenGeometry(geometry);
+
+          if (geometry.lot_id) {
+            const linkedLot =
+              mapData.lots.find((lot) => lot.id === geometry.lot_id) ?? null;
+
+            setSelectedLot(linkedLot);
+          } else {
+            setSelectedLot(null);
+          }
+        });
+
         const area =
           geometry.area_m2 !== null
             ? `${formatNumber(geometry.area_m2)} m²`
@@ -901,11 +987,14 @@ export default function ProjectCoreMapPage() {
 
         polygon.bindTooltip(
           [
-            "<strong>Vetorização do cidadão</strong>",
-            `Status: ${status}`,
+            "Vetorização do cidadão",
             `Área: ${area}`,
             `Perímetro: ${perimeter}`,
-          ].join("<br />"),
+            `Status: ${status}`,
+            geometry.lot_id
+              ? "Vinculada a lote técnico"
+              : "Sem vínculo técnico",
+          ].join("<br>"),
           {
             sticky: true,
             direction: "top",
@@ -1012,7 +1101,14 @@ export default function ProjectCoreMapPage() {
     return () => {
       cancelled = true;
     };
-  }, [data, selectedLot, orthomosaic, orthomosaicBlobUrl, showOrthomosaic]);
+  }, [
+    data,
+    selectedLot,
+    selectedCitizenGeometry,
+    orthomosaic,
+    orthomosaicBlobUrl,
+    showOrthomosaic,
+  ]);
 
   const filteredStatus = useMemo(() => {
     if (!data) return [];
@@ -1380,20 +1476,16 @@ export default function ProjectCoreMapPage() {
           </section>
 
           <aside className="max-h-[620px] overflow-y-auto rounded-[2rem] border border-slate-200 bg-white p-6 shadow-sm">
-            {!selectedLot ? (
-              <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-10 text-center">
-                <MapPinned className="mx-auto h-12 w-12 text-slate-400" />
-
-                <h2 className="mt-4 text-lg font-black text-slate-800">
-                  Nenhum lote selecionado
-                </h2>
-
-                <p className="mt-2 text-sm text-slate-500">
-                  Clique em um lote ou ponto no mapa para visualizar os
-                  detalhes.
-                </p>
-              </div>
-            ) : (
+            {selectedCitizenGeometry ? (
+              <CitizenGeometryDetailsPanel
+                geometry={selectedCitizenGeometry}
+                lots={data?.lots ?? []}
+                savingLink={savingCitizenGeometryLink}
+                onLinkChange={(lotId) =>
+                  updateCitizenGeometryLink(selectedCitizenGeometry, lotId)
+                }
+              />
+            ) : selectedLot ? (
               <LotDetailsPanel
                 lot={selectedLot}
                 saving={savingStatus}
@@ -1401,11 +1493,396 @@ export default function ProjectCoreMapPage() {
                   updateLotStatus(selectedLot, status)
                 }
               />
+            ) : (
+              <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-10 text-center">
+                <MapPinned className="mx-auto h-12 w-12 text-slate-400" />
+
+                <h2 className="mt-4 text-lg font-black text-slate-800">
+                  Nenhuma geometria selecionada
+                </h2>
+
+                <p className="mt-2 text-sm text-slate-500">
+                  Clique em um lote técnico ou em uma vetorização de campo para
+                  visualizar os detalhes.
+                </p>
+              </div>
             )}
           </aside>
         </div>
       </section>
     </main>
+  );
+}
+
+function CitizenGeometryDetailsPanel({
+  geometry,
+  lots,
+  savingLink,
+  onLinkChange,
+}: {
+  geometry: LotGeometryMapItem;
+  lots: LotMapItem[];
+  savingLink: boolean;
+  onLinkChange: (lotId: string | null) => void;
+}) {
+  const linkedLot =
+    geometry.lot_id !== null
+      ? (lots.find((lot) => lot.id === geometry.lot_id) ?? null)
+      : null;
+
+  const linkedSeal = linkedLot?.seal ?? null;
+  const linkedSocial = linkedLot?.social ?? null;
+
+  const [selectedLotId, setSelectedLotId] = useState<string>(
+    geometry.lot_id ?? "",
+  );
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setSelectedLotId(geometry.lot_id ?? "");
+    }, 0);
+
+    return () => window.clearTimeout(timer);
+  }, [geometry.id, geometry.lot_id]);
+
+  const collectionDate =
+    geometry.client_created_at ??
+    geometry.server_received_at ??
+    geometry.created_at;
+
+  const hasChangedLink = selectedLotId !== (geometry.lot_id ?? "");
+
+  return (
+    <div>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="text-xs font-black uppercase tracking-[0.3em] text-purple-700">
+            Vetorização de campo
+          </p>
+
+          <h2 className="mt-2 text-2xl font-black text-slate-950">
+            Geometria do cidadão
+          </h2>
+
+          <p className="mt-2 text-sm font-semibold leading-6 text-slate-500">
+            Evidência geoespacial original levantada em campo. O vínculo com um
+            lote técnico não modifica esta geometria.
+          </p>
+        </div>
+
+        <span className="shrink-0 rounded-full bg-purple-100 px-3 py-1 text-xs font-black text-purple-800">
+          {normalizeLabel(geometry.workflow_status)}
+        </span>
+      </div>
+
+      <div className="mt-6 grid gap-3 md:grid-cols-2">
+        <InfoCard
+          title="Área"
+          value={
+            geometry.area_m2 !== null
+              ? `${formatNumber(geometry.area_m2)} m²`
+              : "-"
+          }
+        />
+
+        <InfoCard
+          title="Perímetro"
+          value={
+            geometry.perimeter_m !== null
+              ? `${formatNumber(geometry.perimeter_m)} m`
+              : "-"
+          }
+        />
+
+        <InfoCard
+          title="Precisão"
+          value={
+            geometry.geospatial_accuracy_m !== null
+              ? `${formatNumber(geometry.geospatial_accuracy_m)} m`
+              : "-"
+          }
+        />
+
+        <InfoCard title="Versão" value={String(geometry.version)} />
+      </div>
+
+      <section className="mt-5 rounded-3xl border border-purple-100 bg-purple-50 p-5">
+        <h3 className="font-black text-purple-950">
+          Identificação da evidência
+        </h3>
+
+        <div className="mt-4 space-y-2 text-sm font-semibold text-slate-600">
+          <p>
+            Origem:{" "}
+            <span className="text-slate-950">
+              {normalizeLabel(geometry.origin)}
+            </span>
+          </p>
+
+          <p>
+            Status:{" "}
+            <span className="text-slate-950">
+              {normalizeLabel(geometry.workflow_status)}
+            </span>
+          </p>
+
+          <p>
+            Coleta:{" "}
+            <span className="text-slate-950">
+              {collectionDate
+                ? new Date(collectionDate).toLocaleString("pt-BR")
+                : "-"}
+            </span>
+          </p>
+
+          <p className="break-all">
+            ID local:{" "}
+            <span className="text-slate-950">{geometry.source_local_id}</span>
+          </p>
+
+          <p className="break-all">
+            Dispositivo:{" "}
+            <span className="text-slate-950">{geometry.source_device_id}</span>
+          </p>
+        </div>
+
+        {geometry.notes && (
+          <div className="mt-4 rounded-2xl bg-white/80 p-4">
+            <p className="text-xs font-black uppercase tracking-wide text-purple-700">
+              Observação de campo
+            </p>
+
+            <p className="mt-2 text-sm font-semibold leading-6 text-slate-700">
+              {geometry.notes}
+            </p>
+          </div>
+        )}
+
+        {geometry.validation_note && (
+          <div className="mt-3 rounded-2xl bg-white/80 p-4">
+            <p className="text-xs font-black uppercase tracking-wide text-purple-700">
+              Observação técnica
+            </p>
+
+            <p className="mt-2 text-sm font-semibold leading-6 text-slate-700">
+              {geometry.validation_note}
+            </p>
+          </div>
+        )}
+      </section>
+
+      <section className="mt-5 rounded-3xl border border-slate-200 bg-white p-5">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h3 className="font-black text-slate-950">
+              Vínculo com lote técnico
+            </h3>
+
+            <p className="mt-1 text-xs font-semibold leading-5 text-slate-500">
+              Relaciona esta evidência de campo à geometria técnica preliminar
+              correspondente.
+            </p>
+          </div>
+
+          {linkedLot ? (
+            <span className="rounded-full bg-green-100 px-3 py-1 text-xs font-black text-green-800">
+              Vinculada
+            </span>
+          ) : (
+            <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-black text-amber-800">
+              Sem vínculo
+            </span>
+          )}
+        </div>
+
+        {linkedLot && (
+          <div className="mt-4 rounded-2xl border border-green-100 bg-green-50 p-4">
+            <p className="text-xs font-black uppercase tracking-wide text-green-700">
+              Vínculo atual
+            </p>
+
+            <p className="mt-2 text-lg font-black text-slate-950">
+              Lote {linkedLot.code}
+            </p>
+
+            {linkedLot.block && (
+              <p className="mt-1 text-sm font-semibold text-slate-600">
+                Quadra: {linkedLot.block}
+              </p>
+            )}
+
+            <div className="mt-3 grid grid-cols-2 gap-2 text-xs font-semibold text-slate-600">
+              <div className="rounded-xl bg-white p-3">
+                <span className="block text-slate-400">Área técnica</span>
+                <strong className="mt-1 block text-slate-950">
+                  {formatNumber(linkedLot.area_m2)} m²
+                </strong>
+              </div>
+
+              <div className="rounded-xl bg-white p-3">
+                <span className="block text-slate-400">Perímetro técnico</span>
+                <strong className="mt-1 block text-slate-950">
+                  {formatNumber(linkedLot.perimeter_m)} m
+                </strong>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className="mt-4">
+          <label className="text-xs font-black uppercase tracking-wide text-slate-500">
+            {linkedLot ? "Alterar lote relacionado" : "Selecionar lote"}
+          </label>
+
+          <select
+            value={selectedLotId}
+            disabled={savingLink}
+            onChange={(event) => setSelectedLotId(event.target.value)}
+            className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-800 outline-none transition focus:border-purple-400 focus:ring-4 focus:ring-purple-100 disabled:opacity-60"
+          >
+            <option value="">Sem vínculo técnico</option>
+
+            {lots.map((lot) => (
+              <option key={lot.id} value={lot.id}>
+                Lote {lot.code}
+                {lot.block ? ` · Quadra ${lot.block}` : ""}
+                {lot.area_m2 !== null
+                  ? ` · ${formatNumber(lot.area_m2)} m²`
+                  : ""}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {hasChangedLink && (
+          <div className="mt-4 rounded-2xl border border-blue-100 bg-blue-50 p-3 text-xs font-semibold leading-5 text-blue-800">
+            O vínculo foi alterado na tela, mas ainda não foi salvo. A geometria
+            de campo continuará exatamente com os mesmos vértices.
+          </div>
+        )}
+
+        <div className="mt-4 grid gap-3">
+          <button
+            type="button"
+            disabled={savingLink || !hasChangedLink}
+            onClick={() => onLinkChange(selectedLotId || null)}
+            className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-purple-700 px-5 py-3 text-sm font-black text-white transition hover:bg-purple-800 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {savingLink ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Layers className="h-4 w-4" />
+            )}
+
+            {linkedLot ? "Salvar alteração de vínculo" : "Vincular ao lote"}
+          </button>
+
+          {linkedLot && (
+            <button
+              type="button"
+              disabled={savingLink}
+              onClick={() => {
+                const confirmed = window.confirm(
+                  `Desvincular esta geometria de campo do Lote ${linkedLot.code}?\n\nA geometria original será preservada integralmente.`,
+                );
+
+                if (confirmed) {
+                  setSelectedLotId("");
+                  onLinkChange(null);
+                }
+              }}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-red-200 bg-red-50 px-5 py-3 text-sm font-black text-red-700 transition hover:bg-red-100 disabled:opacity-50"
+            >
+              Desvincular do lote
+            </button>
+          )}
+        </div>
+      </section>
+
+      <section className="mt-5 rounded-3xl bg-slate-50 p-5">
+        <h3 className="flex items-center gap-2 font-black text-slate-950">
+          <MapPinned className="h-5 w-5 text-green-700" />
+          Selagem relacionada
+        </h3>
+
+        {linkedSeal ? (
+          <div className="mt-4 space-y-2 text-sm font-semibold text-slate-600">
+            <p>
+              Selo:{" "}
+              <span className="text-slate-950">{linkedSeal.seal_code}</span>
+            </p>
+
+            <p>
+              Situação:{" "}
+              <span className="text-slate-950">
+                {normalizeLabel(linkedSeal.situation)}
+              </span>
+            </p>
+
+            <p>
+              Vínculo geoespacial:{" "}
+              <span className="text-slate-950">
+                {normalizeLabel(linkedSeal.geo_link_status)}
+              </span>
+            </p>
+          </div>
+        ) : (
+          <p className="mt-4 text-sm font-semibold text-slate-500">
+            Nenhuma selagem relacionada ao lote selecionado.
+          </p>
+        )}
+      </section>
+
+      <section className="mt-4 rounded-3xl bg-slate-50 p-5">
+        <h3 className="flex items-center gap-2 font-black text-slate-950">
+          <User className="h-5 w-5 text-green-700" />
+          Cadastro social relacionado
+        </h3>
+
+        {linkedSocial ? (
+          <div className="mt-4 space-y-2 text-sm font-semibold text-slate-600">
+            <p>
+              Responsável:{" "}
+              <span className="text-slate-950">
+                {linkedSocial.responsible_name}
+              </span>
+            </p>
+
+            <p>
+              CPF:{" "}
+              <span className="text-slate-950">
+                {linkedSocial.responsible_cpf ?? "-"}
+              </span>
+            </p>
+
+            <p>
+              Telefone:{" "}
+              <span className="text-slate-950">
+                {linkedSocial.phone ?? "-"}
+              </span>
+            </p>
+          </div>
+        ) : (
+          <p className="mt-4 text-sm font-semibold text-slate-500">
+            Nenhum cadastro social relacionado ao lote selecionado.
+          </p>
+        )}
+      </section>
+
+      <section className="mt-5 rounded-3xl border border-amber-200 bg-amber-50 p-5">
+        <h3 className="flex items-center gap-2 font-black text-amber-950">
+          <ShieldCheck className="h-5 w-5" />
+          Preservação da evidência de campo
+        </h3>
+
+        <p className="mt-3 text-sm font-semibold leading-6 text-amber-900/80">
+          Esta vetorização representa o levantamento realizado em campo e não
+          será sobrescrita pelo vínculo, pela geometria técnica preliminar ou
+          pela futura geometria consolidada. Alterações administrativas geram
+          uma nova versão do registro mantendo a rastreabilidade da evidência.
+        </p>
+      </section>
+    </div>
   );
 }
 

@@ -4,7 +4,6 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-
 GeometryOrigin = Literal[
     "tecnico_importado",
     "cidadao_declarado",
@@ -142,3 +141,14 @@ class LotGeometryReviewRequest(BaseModel):
 class LotGeometryListResponse(BaseModel):
     project_id: UUID
     records: list[MobileLotGeometryPullItem]
+
+
+class LotGeometryLinkRequest(BaseModel):
+    lot_id: UUID | None = None
+
+
+class LotGeometryLinkResponse(BaseModel):
+    geometry: MobileLotGeometryPullItem
+    lot_code: str | None = None
+    seal_code: str | None = None
+    responsible_name: str | None = None

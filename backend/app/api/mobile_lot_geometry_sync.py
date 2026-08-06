@@ -16,6 +16,8 @@ from app.models.project import Project
 from app.models.reurb import Lot, Seal, SocialRegistration
 from app.models.user import User
 from app.schemas.mobile_lot_geometry_sync import (
+    LotGeometryLinkRequest,
+    LotGeometryLinkResponse,
     LotGeometryListResponse,
     LotGeometryReviewRequest,
     MobileLotGeometryAcceptedItem,
@@ -480,6 +482,114 @@ def list_project_lot_geometries(
     return LotGeometryListResponse(
         project_id=project_id,
         records=[_to_pull_item(record) for record in records],
+    )
+
+
+@router.patch(
+    "/projects/{project_id}/lot-geometries/{geometry_id}/link",
+    response_model=LotGeometryLinkResponse,
+)
+def link_project_lot_geometry(
+    project_id: UUID,
+    geometry_id: UUID,
+    payload: LotGeometryLinkRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> LotGeometryLinkResponse:
+    _ensure_project_access(
+        db,
+        project_id=project_id,
+        current_user=current_user,
+    )
+
+    current = (
+        db.query(LotGeometry)
+        .filter(
+            LotGeometry.id == geometry_id,
+            LotGeometry.project_id == project_id,
+            LotGeometry.is_current.is_(True),
+            LotGeometry.deleted.is_(False),
+        )
+        .with_for_update()
+        .first()
+    )
+
+    if current is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Geometria de campo não encontrada.",
+        )
+
+    lot = None
+    seal = None
+    social = None
+
+    if payload.lot_id is not None:
+        lot = (
+            db.query(Lot)
+            .filter(
+                Lot.id == payload.lot_id,
+                Lot.project_id == project_id,
+            )
+            .first()
+        )
+
+        if lot is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="O lote informado não pertence ao projeto.",
+            )
+
+        seal = (
+            db.query(Seal)
+            .filter(
+                Seal.project_id == project_id,
+                Seal.lot_id == lot.id,
+            )
+            .order_by(Seal.created_at.asc())
+            .first()
+        )
+
+        if seal is not None:
+            social = (
+                db.query(SocialRegistration)
+                .filter(
+                    SocialRegistration.project_id == project_id,
+                    SocialRegistration.seal_code == seal.seal_code,
+                )
+                .first()
+            )
+
+    now = _utcnow()
+
+    linked = _new_version_from_current(
+        current=current,
+        now=now,
+        current_user=current_user,
+    )
+
+    linked.lot_id = lot.id if lot else None
+    linked.seal_id = seal.id if seal else None
+    linked.social_registration_id = social.id if social else None
+
+    # A geometria propriamente dita NÃO é modificada.
+    # Apenas seus vínculos administrativos são versionados.
+    linked.server_received_at = now
+    linked.updated_at = now
+
+    db.add(linked)
+    db.flush()
+
+    current.superseded_by_geometry_id = linked.id
+
+    db.commit()
+    db.refresh(linked)
+
+    return LotGeometryLinkResponse(
+        geometry=_to_pull_item(linked),
+        lot_code=lot.code if lot else None,
+        seal_code=seal.seal_code if seal else None,
+        responsible_name=social.responsible_name if social else None,
     )
 
 
