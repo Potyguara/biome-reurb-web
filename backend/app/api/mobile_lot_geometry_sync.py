@@ -1,3 +1,4 @@
+import csv
 import io
 import json
 import zipfile
@@ -1026,6 +1027,498 @@ def export_project_lot_geometry_shapefile(
         media_type="application/zip",
         headers={
             "Content-Disposition": (f'attachment; filename="{basename}_shapefile.zip"'),
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+@router.get(
+    "/projects/{project_id}/lot-geometries/export/field-package",
+)
+def export_project_citizen_geometry_field_package(
+    project_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Response:
+    project = _ensure_project_access(
+        db,
+        project_id=project_id,
+        current_user=current_user,
+    )
+
+    current_geometries = (
+        db.query(LotGeometry)
+        .filter(
+            LotGeometry.project_id == project_id,
+            LotGeometry.is_current.is_(True),
+            LotGeometry.deleted.is_(False),
+            LotGeometry.origin.in_(
+                [
+                    "cidadao_vetorizado",
+                    "cidadao_declarado",
+                ]
+            ),
+        )
+        .order_by(
+            LotGeometry.created_at.asc(),
+            LotGeometry.version.asc(),
+        )
+        .all()
+    )
+
+    current_geometries = [item for item in current_geometries if item.geometry_geojson]
+
+    if not current_geometries:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                "Não existem geometrias atuais do cidadão "
+                "disponíveis para exportação."
+            ),
+        )
+
+    history = (
+        db.query(LotGeometry)
+        .filter(
+            LotGeometry.project_id == project_id,
+            LotGeometry.origin.in_(
+                [
+                    "cidadao_vetorizado",
+                    "cidadao_declarado",
+                ]
+            ),
+        )
+        .order_by(
+            LotGeometry.source_local_id.asc(),
+            LotGeometry.version.asc(),
+        )
+        .all()
+    )
+
+    export_items: list[dict] = []
+
+    for geometry in current_geometries:
+        context = _get_geometry_export_context(
+            db,
+            project_id=project_id,
+            geometry=geometry,
+        )
+
+        export_items.append(
+            {
+                "geometry": geometry,
+                "context": context,
+                "properties": _geometry_properties(
+                    geometry,
+                    context,
+                ),
+            }
+        )
+
+    # =========================================================
+    # GEOJSON
+    # =========================================================
+
+    feature_collection = {
+        "type": "FeatureCollection",
+        "name": "vetorizacoes_cidadao",
+        "crs": {
+            "type": "name",
+            "properties": {
+                "name": "urn:ogc:def:crs:EPSG::4674",
+            },
+        },
+        "features": [
+            {
+                "type": "Feature",
+                "id": item["properties"]["geometry_id"],
+                "properties": item["properties"],
+                "geometry": item["geometry"].geometry_geojson,
+            }
+            for item in export_items
+        ],
+    }
+
+    geojson_content = json.dumps(
+        feature_collection,
+        ensure_ascii=False,
+        indent=2,
+        default=str,
+    )
+
+    # =========================================================
+    # KML
+    # =========================================================
+
+    kml_placemarks: list[str] = []
+
+    for item in export_items:
+        geometry = item["geometry"]
+        properties = item["properties"]
+        context = item["context"]
+
+        basename = _geometry_export_basename(
+            geometry,
+            context,
+        )
+
+        extended_data = "\n".join(f"""
+            <Data name="{escape(str(key))}">
+              <value>{escape("" if value is None else str(value))}</value>
+            </Data>
+            """ for key, value in properties.items())
+
+        geometry_xml = _kml_coordinates_from_geometry(geometry.geometry_geojson)
+
+        kml_placemarks.append(f"""
+            <Placemark>
+              <name>{escape(basename)}</name>
+              <description>
+                Geometria original vetorizada pelo cidadão em campo.
+                Registro corrente para análise técnica.
+              </description>
+              <styleUrl>#cidadao</styleUrl>
+              <ExtendedData>
+                {extended_data}
+              </ExtendedData>
+              {geometry_xml}
+            </Placemark>
+            """)
+
+    kml_content = f"""<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>Vetorizacoes do cidadao - {escape(project.name)}</name>
+
+    <Style id="cidadao">
+      <LineStyle>
+        <color>ffff3399</color>
+        <width>4</width>
+      </LineStyle>
+      <PolyStyle>
+        <color>3340a0c0</color>
+      </PolyStyle>
+    </Style>
+
+    {''.join(kml_placemarks)}
+  </Document>
+</kml>
+"""
+
+    # =========================================================
+    # SHAPEFILE
+    # =========================================================
+
+    shp_buffer = io.BytesIO()
+    shx_buffer = io.BytesIO()
+    dbf_buffer = io.BytesIO()
+
+    writer = shapefile.Writer(
+        shp=shp_buffer,
+        shx=shx_buffer,
+        dbf=dbf_buffer,
+        shapeType=shapefile.POLYGON,
+        encoding="utf-8",
+    )
+
+    writer.field("GEOM_ID", "C", size=36)
+    writer.field("ORIGEM", "C", size=50)
+    writer.field("STATUS", "C", size=50)
+    writer.field("VERSAO", "N", size=8, decimal=0)
+    writer.field("LOTE", "C", size=50)
+    writer.field("SELO", "C", size=50)
+    writer.field("RESPONS", "C", size=120)
+    writer.field("CPF", "C", size=20)
+    writer.field("AREA_M2", "F", size=18, decimal=4)
+    writer.field("PERIM_M", "F", size=18, decimal=4)
+    writer.field("PREC_M", "F", size=18, decimal=4)
+    writer.field("SRC_LOCAL", "C", size=36)
+    writer.field("SRC_DEV", "C", size=36)
+
+    for item in export_items:
+        geometry = item["geometry"]
+        properties = item["properties"]
+
+        parts = _geojson_polygon_parts(geometry.geometry_geojson)
+
+        writer.poly(parts)
+
+        writer.record(
+            properties["geometry_id"],
+            properties["origin"],
+            properties["workflow_status"],
+            properties["version"],
+            properties["lot_code"] or "",
+            properties["seal_code"] or "",
+            properties["responsible_name"] or "",
+            properties["responsible_cpf"] or "",
+            properties["area_m2"] or 0,
+            properties["perimeter_m"] or 0,
+            properties["accuracy_m"] or 0,
+            properties["source_local_id"],
+            properties["source_device_id"],
+        )
+
+    writer.close()
+
+    prj_content = (
+        'GEOGCS["SIRGAS 2000",'
+        'DATUM["Sistema_de_Referencia_Geocentrico_para_las_AmericaS_2000",'
+        'SPHEROID["GRS 1980",6378137,298.257222101]],'
+        'PRIMEM["Greenwich",0],'
+        'UNIT["degree",0.0174532925199433],'
+        'AUTHORITY["EPSG","4674"]]'
+    )
+
+    # =========================================================
+    # CSV DE VÍNCULOS
+    # =========================================================
+
+    links_buffer = io.StringIO()
+
+    links_writer = csv.writer(
+        links_buffer,
+        delimiter=";",
+        lineterminator="\n",
+    )
+
+    links_writer.writerow(
+        [
+            "geometry_id",
+            "source_local_id",
+            "version",
+            "origin",
+            "workflow_status",
+            "lot_id",
+            "lot_code",
+            "seal_id",
+            "seal_code",
+            "responsible_name",
+            "responsible_cpf",
+            "area_m2",
+            "perimeter_m",
+            "accuracy_m",
+        ]
+    )
+
+    for item in export_items:
+        properties = item["properties"]
+
+        links_writer.writerow(
+            [
+                properties["geometry_id"],
+                properties["source_local_id"],
+                properties["version"],
+                properties["origin"],
+                properties["workflow_status"],
+                properties["lot_id"] or "",
+                properties["lot_code"] or "",
+                properties["seal_id"] or "",
+                properties["seal_code"] or "",
+                properties["responsible_name"] or "",
+                properties["responsible_cpf"] or "",
+                properties["area_m2"] or "",
+                properties["perimeter_m"] or "",
+                properties["accuracy_m"] or "",
+            ]
+        )
+
+    # =========================================================
+    # CSV DE HISTÓRICO / CADEIA DE CUSTÓDIA
+    # =========================================================
+
+    history_buffer = io.StringIO()
+
+    history_writer = csv.writer(
+        history_buffer,
+        delimiter=";",
+        lineterminator="\n",
+    )
+
+    history_writer.writerow(
+        [
+            "geometry_id",
+            "source_local_id",
+            "source_device_id",
+            "origin",
+            "workflow_status",
+            "version",
+            "is_current",
+            "deleted",
+            "lot_id",
+            "seal_id",
+            "social_registration_id",
+            "parent_geometry_id",
+            "superseded_by_geometry_id",
+            "area_m2",
+            "perimeter_m",
+            "accuracy_m",
+            "client_created_at",
+            "client_updated_at",
+            "server_received_at",
+            "created_at",
+            "updated_at",
+        ]
+    )
+
+    for geometry in history:
+        history_writer.writerow(
+            [
+                str(geometry.id),
+                str(geometry.source_local_id),
+                str(geometry.source_device_id),
+                geometry.origin,
+                geometry.workflow_status,
+                geometry.version,
+                geometry.is_current,
+                geometry.deleted,
+                str(geometry.lot_id) if geometry.lot_id else "",
+                str(geometry.seal_id) if geometry.seal_id else "",
+                (
+                    str(geometry.social_registration_id)
+                    if geometry.social_registration_id
+                    else ""
+                ),
+                (
+                    str(geometry.parent_geometry_id)
+                    if geometry.parent_geometry_id
+                    else ""
+                ),
+                (
+                    str(geometry.superseded_by_geometry_id)
+                    if geometry.superseded_by_geometry_id
+                    else ""
+                ),
+                geometry.area_m2 or "",
+                geometry.perimeter_m or "",
+                geometry.geospatial_accuracy_m or "",
+                (
+                    geometry.client_created_at.isoformat()
+                    if geometry.client_created_at
+                    else ""
+                ),
+                (
+                    geometry.client_updated_at.isoformat()
+                    if geometry.client_updated_at
+                    else ""
+                ),
+                (
+                    geometry.server_received_at.isoformat()
+                    if geometry.server_received_at
+                    else ""
+                ),
+                geometry.created_at.isoformat() if geometry.created_at else "",
+                geometry.updated_at.isoformat() if geometry.updated_at else "",
+            ]
+        )
+
+    # =========================================================
+    # MANIFEST
+    # =========================================================
+
+    linked_count = sum(
+        1 for item in export_items if item["geometry"].lot_id is not None
+    )
+
+    manifest = {
+        "package_type": "BIOME_REURB_FIELD_GEOMETRIES",
+        "project_id": str(project.id),
+        "project_name": project.name,
+        "generated_at": _utcnow().isoformat(),
+        "crs": "SIRGAS 2000 / EPSG:4674",
+        "current_geometries": len(export_items),
+        "linked_geometries": linked_count,
+        "unlinked_geometries": (len(export_items) - linked_count),
+        "historical_records": len(history),
+        "rules": {
+            "operational_layer": (
+                "is_current=true; deleted=false; "
+                "origin=cidadao_vetorizado/cidadao_declarado"
+            ),
+            "citizen_geometry_is_preserved": True,
+            "administrative_link_does_not_modify_vertices": True,
+        },
+    }
+
+    # =========================================================
+    # ZIP FINAL
+    # =========================================================
+
+    zip_buffer = io.BytesIO()
+
+    with zipfile.ZipFile(
+        zip_buffer,
+        mode="w",
+        compression=zipfile.ZIP_DEFLATED,
+    ) as archive:
+        base = "01_VETORIZACOES_CIDADAO"
+
+        archive.writestr(
+            f"{base}/vetorizacoes_cidadao.geojson",
+            geojson_content.encode("utf-8"),
+        )
+
+        archive.writestr(
+            f"{base}/vetorizacoes_cidadao.kml",
+            kml_content.encode("utf-8"),
+        )
+
+        archive.writestr(
+            f"{base}/vetorizacoes_cidadao.shp",
+            shp_buffer.getvalue(),
+        )
+
+        archive.writestr(
+            f"{base}/vetorizacoes_cidadao.shx",
+            shx_buffer.getvalue(),
+        )
+
+        archive.writestr(
+            f"{base}/vetorizacoes_cidadao.dbf",
+            dbf_buffer.getvalue(),
+        )
+
+        archive.writestr(
+            f"{base}/vetorizacoes_cidadao.prj",
+            prj_content.encode("utf-8"),
+        )
+
+        archive.writestr(
+            f"{base}/vetorizacoes_cidadao.cpg",
+            b"UTF-8",
+        )
+
+        archive.writestr(
+            "02_VINCULOS/correspondencia_lote_cidadao.csv",
+            ("\ufeff" + links_buffer.getvalue()).encode("utf-8"),
+        )
+
+        archive.writestr(
+            "03_HISTORICO/historico_geometrias.csv",
+            ("\ufeff" + history_buffer.getvalue()).encode("utf-8"),
+        )
+
+        archive.writestr(
+            "04_METADADOS/manifest.json",
+            json.dumps(
+                manifest,
+                ensure_ascii=False,
+                indent=2,
+                default=str,
+            ).encode("utf-8"),
+        )
+
+    safe_project = _safe_export_filename(project.name)
+
+    filename = (
+        f"pacote_campo_reurb_{safe_project}_" f"{_utcnow().date().isoformat()}.zip"
+    )
+
+    return Response(
+        content=zip_buffer.getvalue(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": (f'attachment; filename="{filename}"'),
             "Cache-Control": "no-store",
         },
     )

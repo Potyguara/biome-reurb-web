@@ -51,8 +51,6 @@ type ModalState = {
   message: string;
 };
 
-
-
 function formatDateTime(value: string | null | undefined): string {
   if (!value) return "-";
 
@@ -206,13 +204,10 @@ export default function ProjectExportsPage() {
         "Aguarde enquanto o sistema consolida lotes, selagens, cadastros, documentos e pendências.",
       );
 
-      const response = await api.get(
-        `/projects/${projectId}/exports/matrix`,
-        {
-          responseType: "blob",
-          validateStatus: (status) => status < 500,
-        },
-      );
+      const response = await api.get(`/projects/${projectId}/exports/matrix`, {
+        responseType: "blob",
+        validateStatus: (status) => status < 500,
+      });
 
       if (response.status !== 200) {
         showError(
@@ -275,146 +270,249 @@ export default function ProjectExportsPage() {
   }
 
   async function downloadGeospatialPackage() {
-  try {
-    setDownloading("geospatial");
+    try {
+      setDownloading("geospatial");
 
-    showLoading(
-      "Gerando pacote geoespacial",
-      "Aguarde enquanto o sistema consolida lotes, selagens e atributos em arquivos GeoJSON e CSV.",
-    );
+      showLoading(
+        "Gerando pacote geoespacial",
+        "Aguarde enquanto o sistema consolida lotes, selagens e atributos em arquivos GeoJSON e CSV.",
+      );
 
-    const response = await api.get(
-      `/projects/${projectId}/exports/geospatial-package`,
-      {
-        responseType: "blob",
-        validateStatus: (status) => status < 500,
-      },
-    );
+      const response = await api.get(
+        `/projects/${projectId}/exports/geospatial-package`,
+        {
+          responseType: "blob",
+          validateStatus: (status) => status < 500,
+        },
+      );
 
-    if (response.status !== 200) {
+      if (response.status !== 200) {
+        showError(
+          "Erro ao exportar pacote",
+          "Não foi possível gerar o pacote geoespacial do núcleo.",
+        );
+        return;
+      }
+
+      const contentDisposition = response.headers?.["content-disposition"];
+      const headerFilename =
+        getFilenameFromContentDisposition(contentDisposition);
+
+      const filename =
+        headerFilename ||
+        `pacote_geoespacial_reurb_${projectId}_${new Date()
+          .toISOString()
+          .slice(0, 10)}.zip`;
+
+      const blob = new Blob([response.data], {
+        type: "application/zip",
+      });
+
+      const blobUrl = URL.createObjectURL(blob);
+
+      const anchor = window.document.createElement("a");
+      anchor.href = blobUrl;
+      anchor.download = filename;
+      window.document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+
+      setTimeout(() => {
+        URL.revokeObjectURL(blobUrl);
+      }, 30000);
+
+      showSuccess(
+        "Pacote geoespacial gerado",
+        "O pacote geoespacial do núcleo foi exportado com sucesso.",
+      );
+
+      await load();
+    } catch (error) {
       showError(
         "Erro ao exportar pacote",
-        "Não foi possível gerar o pacote geoespacial do núcleo.",
+        getApiErrorMessage(
+          error,
+          "Não foi possível exportar o pacote geoespacial do núcleo.",
+        ),
       );
-      return;
+    } finally {
+      setDownloading(null);
     }
-
-    const contentDisposition = response.headers?.["content-disposition"];
-    const headerFilename =
-      getFilenameFromContentDisposition(contentDisposition);
-
-    const filename =
-      headerFilename ||
-      `pacote_geoespacial_reurb_${projectId}_${new Date()
-        .toISOString()
-        .slice(0, 10)}.zip`;
-
-    const blob = new Blob([response.data], {
-      type: "application/zip",
-    });
-
-    const blobUrl = URL.createObjectURL(blob);
-
-    const anchor = window.document.createElement("a");
-    anchor.href = blobUrl;
-    anchor.download = filename;
-    window.document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-
-    setTimeout(() => {
-      URL.revokeObjectURL(blobUrl);
-    }, 30000);
-
-    showSuccess(
-      "Pacote geoespacial gerado",
-      "O pacote geoespacial do núcleo foi exportado com sucesso.",
-    );
-
-    await load();
-  } catch (error) {
-    showError(
-      "Erro ao exportar pacote",
-      getApiErrorMessage(
-        error,
-        "Não foi possível exportar o pacote geoespacial do núcleo.",
-      ),
-    );
-  } finally {
-    setDownloading(null);
   }
-}
+  async function downloadCitizenFieldPackage() {
+    try {
+      setDownloading("citizen-field");
 
-async function downloadMetricatopoPackage() {
-  try {
-    setDownloading("metricatopo");
+      showLoading(
+        "Gerando levantamento geoespacial de campo",
+        "Aguarde enquanto o sistema organiza as vetorizações do cidadão, vínculos administrativos, histórico de versões e metadados do levantamento.",
+      );
 
-    showLoading(
-      "Gerando pacote Métrica TOPO",
-      "Aguarde enquanto o sistema consolida os lotes aptos, vértices, atributos e confrontantes preliminares.",
-    );
+      const response = await api.get(
+        `/projects/${projectId}/lot-geometries/export/field-package`,
+        {
+          responseType: "blob",
+          validateStatus: (status) => status < 500,
+        },
+      );
 
-    const response = await api.get(
-      `/projects/${projectId}/exports/metricatopo-package`,
-      {
-        responseType: "blob",
-        validateStatus: (status) => status < 500,
-      },
-    );
+      if (response.status !== 200) {
+        let message =
+          "Não foi possível gerar o pacote de levantamento geoespacial de campo.";
 
-    if (response.status !== 200) {
+        try {
+          const contentType = response.headers?.["content-type"];
+
+          if (
+            typeof contentType === "string" &&
+            contentType.includes("application/json")
+          ) {
+            const text = await response.data.text();
+            const parsed = JSON.parse(text);
+
+            if (typeof parsed?.detail === "string") {
+              message = parsed.detail;
+            }
+          }
+        } catch {
+          // Mantém mensagem padrão.
+        }
+
+        showError("Erro ao exportar levantamento de campo", message);
+        return;
+      }
+
+      const contentDisposition = response.headers?.["content-disposition"];
+      const headerFilename =
+        getFilenameFromContentDisposition(contentDisposition);
+
+      const filename =
+        headerFilename ||
+        `levantamento_geoespacial_campo_${projectId}_${new Date()
+          .toISOString()
+          .slice(0, 10)}.zip`;
+
+      const contentTypeHeader = response.headers?.["content-type"];
+
+      const contentType =
+        typeof contentTypeHeader === "string"
+          ? contentTypeHeader
+          : "application/zip";
+
+      const blob = new Blob([response.data], {
+        type: contentType,
+      });
+
+      const blobUrl = URL.createObjectURL(blob);
+
+      const anchor = window.document.createElement("a");
+      anchor.href = blobUrl;
+      anchor.download = filename;
+
+      window.document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+
+      setTimeout(() => {
+        URL.revokeObjectURL(blobUrl);
+      }, 30000);
+
+      showSuccess(
+        "Levantamento de campo exportado",
+        [
+          "O pacote geoespacial de campo foi gerado com sucesso.",
+          "",
+          "O arquivo contém:",
+          "• vetorizações atuais do cidadão em SHP;",
+          "• vetorizações atuais em KML;",
+          "• vetorizações atuais em GeoJSON;",
+          "• tabela de correspondência entre geometria, lote, selagem e cidadão;",
+          "• histórico de versões das geometrias;",
+          "• metadados e regras de preservação da evidência de campo.",
+        ].join("\n"),
+      );
+    } catch (error) {
+      showError(
+        "Erro ao exportar levantamento de campo",
+        getApiErrorMessage(
+          error,
+          "Não foi possível exportar o levantamento geoespacial de campo.",
+        ),
+      );
+    } finally {
+      setDownloading(null);
+    }
+  }
+  async function downloadMetricatopoPackage() {
+    try {
+      setDownloading("metricatopo");
+
+      showLoading(
+        "Gerando pacote Métrica TOPO",
+        "Aguarde enquanto o sistema consolida os lotes aptos, vértices, atributos e confrontantes preliminares.",
+      );
+
+      const response = await api.get(
+        `/projects/${projectId}/exports/metricatopo-package`,
+        {
+          responseType: "blob",
+          validateStatus: (status) => status < 500,
+        },
+      );
+
+      if (response.status !== 200) {
+        showError(
+          "Erro ao exportar pacote",
+          "Não foi possível gerar o pacote Métrica TOPO. Verifique se existem lotes aptos com geometria.",
+        );
+        return;
+      }
+
+      const contentDisposition = response.headers?.["content-disposition"];
+      const headerFilename =
+        getFilenameFromContentDisposition(contentDisposition);
+
+      const filename =
+        headerFilename ||
+        `pacote_metricatopo_reurb_${projectId}_${new Date()
+          .toISOString()
+          .slice(0, 10)}.zip`;
+
+      const blob = new Blob([response.data], {
+        type: "application/zip",
+      });
+
+      const blobUrl = URL.createObjectURL(blob);
+
+      const anchor = window.document.createElement("a");
+      anchor.href = blobUrl;
+      anchor.download = filename;
+      window.document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+
+      setTimeout(() => {
+        URL.revokeObjectURL(blobUrl);
+      }, 30000);
+
+      showSuccess(
+        "Pacote Métrica TOPO gerado",
+        "O pacote com lotes aptos, atributos, vértices e confrontantes preliminares foi exportado com sucesso.",
+      );
+
+      await load();
+    } catch (error) {
       showError(
         "Erro ao exportar pacote",
-        "Não foi possível gerar o pacote Métrica TOPO. Verifique se existem lotes aptos com geometria.",
+        getApiErrorMessage(
+          error,
+          "Não foi possível exportar o pacote Métrica TOPO.",
+        ),
       );
-      return;
+    } finally {
+      setDownloading(null);
     }
-
-    const contentDisposition = response.headers?.["content-disposition"];
-    const headerFilename =
-      getFilenameFromContentDisposition(contentDisposition);
-
-    const filename =
-      headerFilename ||
-      `pacote_metricatopo_reurb_${projectId}_${new Date()
-        .toISOString()
-        .slice(0, 10)}.zip`;
-
-    const blob = new Blob([response.data], {
-      type: "application/zip",
-    });
-
-    const blobUrl = URL.createObjectURL(blob);
-
-    const anchor = window.document.createElement("a");
-    anchor.href = blobUrl;
-    anchor.download = filename;
-    window.document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-
-    setTimeout(() => {
-      URL.revokeObjectURL(blobUrl);
-    }, 30000);
-
-    showSuccess(
-      "Pacote Métrica TOPO gerado",
-      "O pacote com lotes aptos, atributos, vértices e confrontantes preliminares foi exportado com sucesso.",
-    );
-
-    await load();
-  } catch (error) {
-    showError(
-      "Erro ao exportar pacote",
-      getApiErrorMessage(
-        error,
-        "Não foi possível exportar o pacote Métrica TOPO.",
-      ),
-    );
-  } finally {
-    setDownloading(null);
   }
-}
 
   function showLoading(title: string, message: string) {
     setModal({
@@ -451,75 +549,75 @@ async function downloadMetricatopoPackage() {
   }
 
   async function downloadLotsDossiers() {
-  try {
-    setDownloading("dossiers");
+    try {
+      setDownloading("dossiers");
 
-    showLoading(
-      "Gerando dossiês individuais",
-      "Aguarde enquanto o sistema organiza fichas cadastrais, documentos, geometrias e atributos por lote.",
-    );
+      showLoading(
+        "Gerando dossiês individuais",
+        "Aguarde enquanto o sistema organiza fichas cadastrais, documentos, geometrias e atributos por lote.",
+      );
 
-    const response = await api.get(
-      `/projects/${projectId}/exports/lots-dossiers`,
-      {
-        responseType: "blob",
-        validateStatus: (status) => status < 500,
-      },
-    );
+      const response = await api.get(
+        `/projects/${projectId}/exports/lots-dossiers`,
+        {
+          responseType: "blob",
+          validateStatus: (status) => status < 500,
+        },
+      );
 
-    if (response.status !== 200) {
+      if (response.status !== 200) {
+        showError(
+          "Erro ao exportar dossiês",
+          "Não foi possível gerar os dossiês individuais dos lotes.",
+        );
+        return;
+      }
+
+      const contentDisposition = response.headers?.["content-disposition"];
+      const headerFilename =
+        getFilenameFromContentDisposition(contentDisposition);
+
+      const filename =
+        headerFilename ||
+        `dossies_lotes_reurb_${projectId}_${new Date()
+          .toISOString()
+          .slice(0, 10)}.zip`;
+
+      const blob = new Blob([response.data], {
+        type: "application/zip",
+      });
+
+      const blobUrl = URL.createObjectURL(blob);
+
+      const anchor = window.document.createElement("a");
+      anchor.href = blobUrl;
+      anchor.download = filename;
+      window.document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+
+      setTimeout(() => {
+        URL.revokeObjectURL(blobUrl);
+      }, 30000);
+
+      showSuccess(
+        "Dossiês individuais gerados",
+        "Os dossiês dos lotes foram exportados com sucesso.",
+      );
+
+      await load();
+    } catch (error) {
       showError(
         "Erro ao exportar dossiês",
-        "Não foi possível gerar os dossiês individuais dos lotes.",
+        getApiErrorMessage(
+          error,
+          "Não foi possível exportar os dossiês individuais dos lotes.",
+        ),
       );
-      return;
+    } finally {
+      setDownloading(null);
     }
-
-    const contentDisposition = response.headers?.["content-disposition"];
-    const headerFilename =
-      getFilenameFromContentDisposition(contentDisposition);
-
-    const filename =
-      headerFilename ||
-      `dossies_lotes_reurb_${projectId}_${new Date()
-        .toISOString()
-        .slice(0, 10)}.zip`;
-
-    const blob = new Blob([response.data], {
-      type: "application/zip",
-    });
-
-    const blobUrl = URL.createObjectURL(blob);
-
-    const anchor = window.document.createElement("a");
-    anchor.href = blobUrl;
-    anchor.download = filename;
-    window.document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-
-    setTimeout(() => {
-      URL.revokeObjectURL(blobUrl);
-    }, 30000);
-
-    showSuccess(
-      "Dossiês individuais gerados",
-      "Os dossiês dos lotes foram exportados com sucesso.",
-    );
-
-    await load();
-  } catch (error) {
-    showError(
-      "Erro ao exportar dossiês",
-      getApiErrorMessage(
-        error,
-        "Não foi possível exportar os dossiês individuais dos lotes.",
-      ),
-    );
-  } finally {
-    setDownloading(null);
   }
-}
 
   const readyPercent =
     summary && summary.total_lots > 0
@@ -561,8 +659,8 @@ async function downloadMetricatopoPackage() {
 
               {summary && (
                 <p className="mt-2 text-xs font-bold uppercase tracking-wider text-slate-400">
-                  {summary.project_name} · {summary.municipality ?? "-"}
-                  /{summary.state ?? "-"} · {summary.neighborhood ?? "-"}
+                  {summary.project_name} · {summary.municipality ?? "-"}/
+                  {summary.state ?? "-"} · {summary.neighborhood ?? "-"}
                 </p>
               )}
             </div>
@@ -652,43 +750,57 @@ async function downloadMetricatopoPackage() {
                 loading={downloading === "matrix"}
                 enabled
               />
+              <ExportCard
+                icon={<Map className="h-8 w-8" />}
+                title="Levantamento geoespacial de campo"
+                description="Exporta as geometrias vetorizadas pelos cidadãos/moradores preservando a evidência original de campo, os vínculos com lotes técnicos, a cadeia de versões e os metadados necessários para análise externa em SIG."
+                status="Disponível"
+                buttonText="Exportar levantamento de campo"
+                onClick={downloadCitizenFieldPackage}
+                loading={downloading === "citizen-field"}
+                enabled
+              />
 
-<ExportCard
-  icon={<Map className="h-8 w-8" />}
-  title="Pacote geoespacial do núcleo"
-  description="Exporta lotes, selagens e atributos consolidados em GeoJSON e CSV, compatíveis com SIG, Google Earth e softwares técnicos."
-  status="Disponível"
-  buttonText="Exportar pacote geoespacial"
-  onClick={downloadGeospatialPackage}
-  loading={downloading === "geospatial"}
-  enabled
-/>
+              <ExportCard
+                icon={<Map className="h-8 w-8" />}
+                title="Pacote geoespacial do núcleo"
+                description="Exporta lotes, selagens e atributos consolidados em GeoJSON e CSV, compatíveis com SIG, Google Earth e softwares técnicos."
+                status="Disponível"
+                buttonText="Exportar pacote geoespacial"
+                onClick={downloadGeospatialPackage}
+                loading={downloading === "geospatial"}
+                enabled
+              />
 
-<ExportCard
-  icon={<FileArchive className="h-8 w-8" />}
-  title="Pacote Métrica TOPO"
-  description="Exporta geometrias, atributos, vértices e confrontantes preliminares dos lotes aptos para subsidiar planta, memorial e conferência no Métrica TOPO."
-  status={summary.can_export_metricatopo ? "Disponível" : "Sem lotes aptos"}
-  buttonText={
-    summary.can_export_metricatopo
-      ? "Exportar pacote Métrica TOPO"
-      : "Sem lotes aptos"
-  }
-  onClick={downloadMetricatopoPackage}
-  loading={downloading === "metricatopo"}
-  enabled={summary.can_export_metricatopo}
-/>
+              <ExportCard
+                icon={<FileArchive className="h-8 w-8" />}
+                title="Pacote Métrica TOPO"
+                description="Exporta geometrias, atributos, vértices e confrontantes preliminares dos lotes aptos para subsidiar planta, memorial e conferência no Métrica TOPO."
+                status={
+                  summary.can_export_metricatopo
+                    ? "Disponível"
+                    : "Sem lotes aptos"
+                }
+                buttonText={
+                  summary.can_export_metricatopo
+                    ? "Exportar pacote Métrica TOPO"
+                    : "Sem lotes aptos"
+                }
+                onClick={downloadMetricatopoPackage}
+                loading={downloading === "metricatopo"}
+                enabled={summary.can_export_metricatopo}
+              />
 
-      <ExportCard
-  icon={<FolderDown className="h-8 w-8" />}
-  title="Dossiês individuais dos lotes"
-  description="Gera pacote por lote com ficha cadastral em PDF, documentos, geometria individual, atributos consolidados e metadados."
-  status="Disponível"
-  buttonText="Exportar dossiês dos lotes"
-  onClick={downloadLotsDossiers}
-  loading={downloading === "dossiers"}
-  enabled
-/>
+              <ExportCard
+                icon={<FolderDown className="h-8 w-8" />}
+                title="Dossiês individuais dos lotes"
+                description="Gera pacote por lote com ficha cadastral em PDF, documentos, geometria individual, atributos consolidados e metadados."
+                status="Disponível"
+                buttonText="Exportar dossiês dos lotes"
+                onClick={downloadLotsDossiers}
+                loading={downloading === "dossiers"}
+                enabled
+              />
             </div>
 
             <div className="mt-8 rounded-[2rem] border border-slate-200 bg-white p-6 shadow-sm">
@@ -784,9 +896,7 @@ function ExportCard({
   return (
     <article className="rounded-[2rem] border border-slate-200 bg-white p-6 shadow-sm">
       <div className="flex items-start gap-4">
-        <div className="rounded-2xl bg-green-50 p-4 text-green-800">
-          {icon}
-        </div>
+        <div className="rounded-2xl bg-green-50 p-4 text-green-800">{icon}</div>
 
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-start justify-between gap-3">
