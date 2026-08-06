@@ -6,6 +6,7 @@ import {
   AlertTriangle,
   ArrowLeft,
   BadgeCheck,
+  Download,
   FileText,
   Home,
   Layers,
@@ -303,6 +304,78 @@ export default function ProjectCoreMapPage() {
   const [orthomosaicActionId, setOrthomosaicActionId] = useState<string | null>(
     null,
   );
+  const [exportingCitizenGeometry, setExportingCitizenGeometry] = useState<
+    "kml" | "shapefile" | null
+  >(null);
+
+  async function exportCitizenGeometry(
+    geometry: LotGeometryMapItem,
+    format: "kml" | "shapefile",
+  ) {
+    try {
+      setExportingCitizenGeometry(format);
+      setError(null);
+
+      const endpoint =
+        format === "kml"
+          ? `/projects/${projectId}/lot-geometries/${geometry.id}/export/kml`
+          : `/projects/${projectId}/lot-geometries/${geometry.id}/export/shapefile`;
+
+      const response = await api.get(endpoint, {
+        responseType: "blob",
+      });
+
+      const contentDisposition =
+        response.headers["content-disposition"] ??
+        response.headers["Content-Disposition"];
+
+      let filename =
+        format === "kml"
+          ? `vetorizacao_cidadao_${geometry.id}.kml`
+          : `vetorizacao_cidadao_${geometry.id}_shapefile.zip`;
+
+      if (typeof contentDisposition === "string") {
+        const match = contentDisposition.match(/filename="?([^";]+)"?/i);
+
+        if (match?.[1]) {
+          filename = match[1];
+        }
+      }
+
+      const contentType =
+        format === "kml"
+          ? "application/vnd.google-earth.kml+xml"
+          : "application/zip";
+
+      const blob = new Blob([response.data], {
+        type: contentType,
+      });
+
+      const url = URL.createObjectURL(blob);
+
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = filename;
+
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+
+      window.setTimeout(() => {
+        URL.revokeObjectURL(url);
+      }, 1000);
+    } catch (err: unknown) {
+      console.error(err);
+
+      setError(
+        format === "kml"
+          ? "Não foi possível exportar a vetorização do cidadão em KML."
+          : "Não foi possível exportar a vetorização do cidadão em Shapefile.",
+      );
+    } finally {
+      setExportingCitizenGeometry(null);
+    }
+  }
 
   async function loadData() {
     try {
@@ -1481,8 +1554,12 @@ export default function ProjectCoreMapPage() {
                 geometry={selectedCitizenGeometry}
                 lots={data?.lots ?? []}
                 savingLink={savingCitizenGeometryLink}
+                exporting={exportingCitizenGeometry}
                 onLinkChange={(lotId) =>
                   updateCitizenGeometryLink(selectedCitizenGeometry, lotId)
+                }
+                onExport={(format) =>
+                  exportCitizenGeometry(selectedCitizenGeometry, format)
                 }
               />
             ) : selectedLot ? (
@@ -1518,12 +1595,16 @@ function CitizenGeometryDetailsPanel({
   geometry,
   lots,
   savingLink,
+  exporting,
   onLinkChange,
+  onExport,
 }: {
   geometry: LotGeometryMapItem;
   lots: LotMapItem[];
   savingLink: boolean;
+  exporting: "kml" | "shapefile" | null;
   onLinkChange: (lotId: string | null) => void;
+  onExport: (format: "kml" | "shapefile") => void;
 }) {
   const linkedLot =
     geometry.lot_id !== null
@@ -1645,6 +1726,87 @@ function CitizenGeometryDetailsPanel({
             <span className="text-slate-950">{geometry.source_device_id}</span>
           </p>
         </div>
+
+        <section className="mt-5 rounded-3xl border border-purple-200 bg-white p-5">
+          <div className="flex items-start gap-3">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-purple-100 text-purple-700">
+              <Download className="h-5 w-5" />
+            </div>
+
+            <div>
+              <h3 className="font-black text-slate-950">
+                Exportação da evidência de campo
+              </h3>
+
+              <p className="mt-1 text-xs font-semibold leading-5 text-slate-500">
+                Exporte exclusivamente esta vetorização original para
+                conferência, sobreposição e análise em software SIG.
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-4 rounded-2xl border border-purple-100 bg-purple-50 p-4">
+            <div className="flex items-center gap-2 text-xs font-black uppercase tracking-wide text-purple-800">
+              <ShieldCheck className="h-4 w-4" />
+              Geometria de campo preservada
+            </div>
+
+            <p className="mt-2 text-xs font-semibold leading-5 text-slate-600">
+              A exportação mantém os vértices levantados pelo cidadão. O vínculo
+              com lote técnico, selagem ou cadastro social não modifica a
+              geometria original.
+            </p>
+
+            <div className="mt-3 flex flex-wrap gap-2">
+              <span className="rounded-full bg-white px-3 py-1 text-xs font-black text-slate-600">
+                SIRGAS 2000
+              </span>
+
+              <span className="rounded-full bg-white px-3 py-1 text-xs font-black text-slate-600">
+                EPSG:4674
+              </span>
+
+              <span className="rounded-full bg-white px-3 py-1 text-xs font-black text-slate-600">
+                Versão {geometry.version}
+              </span>
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <button
+              type="button"
+              disabled={exporting !== null}
+              onClick={() => onExport("kml")}
+              className="inline-flex items-center justify-center gap-2 rounded-2xl bg-purple-700 px-4 py-3 text-sm font-black text-white transition hover:bg-purple-800 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {exporting === "kml" ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Download className="h-4 w-4" />
+              )}
+              Exportar KML
+            </button>
+
+            <button
+              type="button"
+              disabled={exporting !== null}
+              onClick={() => onExport("shapefile")}
+              className="inline-flex items-center justify-center gap-2 rounded-2xl border border-purple-200 bg-purple-50 px-4 py-3 text-sm font-black text-purple-800 transition hover:bg-purple-100 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {exporting === "shapefile" ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Download className="h-4 w-4" />
+              )}
+              Exportar SHP
+            </button>
+          </div>
+
+          <p className="mt-3 text-[11px] font-semibold leading-5 text-slate-400">
+            O Shapefile será baixado em arquivo ZIP contendo SHP, SHX, DBF, PRJ,
+            CPG e metadados JSON da evidência.
+          </p>
+        </section>
 
         {geometry.notes && (
           <div className="mt-4 rounded-2xl bg-white/80 p-4">

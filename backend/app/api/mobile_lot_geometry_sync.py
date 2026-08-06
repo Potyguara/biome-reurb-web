@@ -1,8 +1,13 @@
+import io
 import json
+import zipfile
 from datetime import datetime, timezone
+from html import escape
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+import shapefile
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from geoalchemy2.functions import ST_GeomFromGeoJSON, ST_Multi, ST_SetSRID
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
@@ -482,6 +487,547 @@ def list_project_lot_geometries(
     return LotGeometryListResponse(
         project_id=project_id,
         records=[_to_pull_item(record) for record in records],
+    )
+
+
+def _get_exportable_lot_geometry(
+    db: Session,
+    *,
+    project_id: UUID,
+    geometry_id: UUID,
+) -> LotGeometry:
+    geometry = (
+        db.query(LotGeometry)
+        .filter(
+            LotGeometry.id == geometry_id,
+            LotGeometry.project_id == project_id,
+            LotGeometry.is_current.is_(True),
+            LotGeometry.deleted.is_(False),
+        )
+        .first()
+    )
+
+    if geometry is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Geometria de campo não encontrada.",
+        )
+
+    if geometry.origin not in {
+        "cidadao_vetorizado",
+        "cidadao_declarado",
+    }:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Esta operação é destinada às geometrias levantadas "
+                "pelo cidadão em campo."
+            ),
+        )
+
+    if not geometry.geometry_geojson:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A geometria selecionada não possui dados geoespaciais.",
+        )
+
+    return geometry
+
+
+def _get_geometry_export_context(
+    db: Session,
+    *,
+    project_id: UUID,
+    geometry: LotGeometry,
+) -> dict:
+    lot = None
+    seal = None
+    social = None
+
+    if geometry.lot_id is not None:
+        lot = (
+            db.query(Lot)
+            .filter(
+                Lot.id == geometry.lot_id,
+                Lot.project_id == project_id,
+            )
+            .first()
+        )
+
+    if geometry.seal_id is not None:
+        seal = (
+            db.query(Seal)
+            .filter(
+                Seal.id == geometry.seal_id,
+                Seal.project_id == project_id,
+            )
+            .first()
+        )
+
+    if seal is None and lot is not None:
+        seal = (
+            db.query(Seal)
+            .filter(
+                Seal.project_id == project_id,
+                Seal.lot_id == lot.id,
+            )
+            .order_by(Seal.created_at.asc())
+            .first()
+        )
+
+    if geometry.social_registration_id is not None:
+        social = (
+            db.query(SocialRegistration)
+            .filter(
+                SocialRegistration.id == geometry.social_registration_id,
+                SocialRegistration.project_id == project_id,
+            )
+            .first()
+        )
+
+    if social is None and seal is not None:
+        social = (
+            db.query(SocialRegistration)
+            .filter(
+                SocialRegistration.project_id == project_id,
+                SocialRegistration.seal_code == seal.seal_code,
+            )
+            .first()
+        )
+
+    return {
+        "lot": lot,
+        "seal": seal,
+        "social": social,
+    }
+
+
+def _safe_export_filename(value: str | None) -> str:
+    if not value:
+        return "sem_identificacao"
+
+    normalized = "".join(
+        char if char.isalnum() or char in {"-", "_"} else "_" for char in value.strip()
+    )
+
+    normalized = "_".join(part for part in normalized.split("_") if part)
+
+    return normalized or "sem_identificacao"
+
+
+def _geometry_export_basename(
+    geometry: LotGeometry,
+    context: dict,
+) -> str:
+    lot = context["lot"]
+    seal = context["seal"]
+    social = context["social"]
+
+    if social is not None and social.responsible_cpf:
+        person_ref = f"CPF_{_safe_export_filename(social.responsible_cpf)}"
+    elif seal is not None:
+        person_ref = _safe_export_filename(seal.seal_code)
+    elif lot is not None:
+        person_ref = f"LOTE_{_safe_export_filename(lot.code)}"
+    else:
+        person_ref = f"GEOM_{str(geometry.id)[:8]}"
+
+    return f"vetorizacao_cidadao_" f"{person_ref}_" f"v{geometry.version}"
+
+
+def _geometry_properties(
+    geometry: LotGeometry,
+    context: dict,
+) -> dict[str, str | int | float | None]:
+    lot = context["lot"]
+    seal = context["seal"]
+    social = context["social"]
+
+    return {
+        "geometry_id": str(geometry.id),
+        "project_id": str(geometry.project_id),
+        "source_local_id": str(geometry.source_local_id),
+        "source_device_id": str(geometry.source_device_id),
+        "origin": geometry.origin,
+        "workflow_status": geometry.workflow_status,
+        "version": geometry.version,
+        "lot_id": str(geometry.lot_id) if geometry.lot_id else None,
+        "lot_code": lot.code if lot else None,
+        "seal_id": str(seal.id) if seal else None,
+        "seal_code": seal.seal_code if seal else None,
+        "responsible_name": (social.responsible_name if social else None),
+        "responsible_cpf": (social.responsible_cpf if social else None),
+        "area_m2": geometry.area_m2,
+        "perimeter_m": geometry.perimeter_m,
+        "accuracy_m": geometry.geospatial_accuracy_m,
+        "notes": geometry.notes,
+        "validation_note": geometry.validation_note,
+        "client_created_at": (
+            geometry.client_created_at.isoformat()
+            if geometry.client_created_at
+            else None
+        ),
+        "server_received_at": (
+            geometry.server_received_at.isoformat()
+            if geometry.server_received_at
+            else None
+        ),
+    }
+
+
+def _geojson_polygon_parts(
+    geometry_geojson: dict,
+) -> list[list[list[float]]]:
+    geometry_type = geometry_geojson.get("type")
+    coordinates = geometry_geojson.get("coordinates")
+
+    if geometry_type == "Polygon":
+        polygons = [coordinates]
+    elif geometry_type == "MultiPolygon":
+        polygons = coordinates
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Somente geometrias Polygon ou MultiPolygon "
+                "podem ser exportadas nesta etapa."
+            ),
+        )
+
+    if not isinstance(polygons, list):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Coordenadas geoespaciais inválidas.",
+        )
+
+    parts: list[list[list[float]]] = []
+
+    for polygon in polygons:
+        if not isinstance(polygon, list):
+            continue
+
+        for ring in polygon:
+            if not isinstance(ring, list):
+                continue
+
+            normalized_ring: list[list[float]] = []
+
+            for coordinate in ring:
+                if isinstance(coordinate, list) and len(coordinate) >= 2:
+                    normalized_ring.append(
+                        [
+                            float(coordinate[0]),
+                            float(coordinate[1]),
+                        ]
+                    )
+
+            if len(normalized_ring) >= 3:
+                if normalized_ring[0] != normalized_ring[-1]:
+                    normalized_ring.append(normalized_ring[0])
+
+                parts.append(normalized_ring)
+
+    if not parts:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A geometria não possui anéis válidos para exportação.",
+        )
+
+    return parts
+
+
+def _kml_coordinates_from_geometry(
+    geometry_geojson: dict,
+) -> str:
+    geometry_type = geometry_geojson.get("type")
+    coordinates = geometry_geojson.get("coordinates")
+
+    def ring_coordinates(ring: list) -> str:
+        return " ".join(
+            f"{float(coord[0])},{float(coord[1])},0"
+            for coord in ring
+            if isinstance(coord, list) and len(coord) >= 2
+        )
+
+    def polygon_xml(polygon: list) -> str:
+        if not polygon:
+            return ""
+
+        outer = ring_coordinates(polygon[0])
+
+        inner_xml = ""
+
+        for inner_ring in polygon[1:]:
+            inner = ring_coordinates(inner_ring)
+
+            inner_xml += f"""
+              <innerBoundaryIs>
+                <LinearRing>
+                  <coordinates>{inner}</coordinates>
+                </LinearRing>
+              </innerBoundaryIs>
+            """
+
+        return f"""
+          <Polygon>
+            <tessellate>1</tessellate>
+            <outerBoundaryIs>
+              <LinearRing>
+                <coordinates>{outer}</coordinates>
+              </LinearRing>
+            </outerBoundaryIs>
+            {inner_xml}
+          </Polygon>
+        """
+
+    if geometry_type == "Polygon":
+        return polygon_xml(coordinates)
+
+    if geometry_type == "MultiPolygon":
+        polygons = "".join(polygon_xml(polygon) for polygon in coordinates)
+
+        return f"""
+          <MultiGeometry>
+            {polygons}
+          </MultiGeometry>
+        """
+
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="Geometria incompatível com a exportação KML.",
+    )
+
+
+@router.get(
+    "/projects/{project_id}/lot-geometries/{geometry_id}/export/kml",
+)
+def export_project_lot_geometry_kml(
+    project_id: UUID,
+    geometry_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Response:
+    _ensure_project_access(
+        db,
+        project_id=project_id,
+        current_user=current_user,
+    )
+
+    geometry = _get_exportable_lot_geometry(
+        db,
+        project_id=project_id,
+        geometry_id=geometry_id,
+    )
+
+    context = _get_geometry_export_context(
+        db,
+        project_id=project_id,
+        geometry=geometry,
+    )
+
+    properties = _geometry_properties(
+        geometry,
+        context,
+    )
+
+    basename = _geometry_export_basename(
+        geometry,
+        context,
+    )
+
+    extended_data = "\n".join(f"""
+        <Data name="{escape(str(key))}">
+          <value>{escape("" if value is None else str(value))}</value>
+        </Data>
+        """ for key, value in properties.items())
+
+    geometry_xml = _kml_coordinates_from_geometry(geometry.geometry_geojson)
+
+    kml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>{escape(basename)}</name>
+
+    <Style id="cidadao">
+      <LineStyle>
+        <color>ffff3399</color>
+        <width>4</width>
+      </LineStyle>
+      <PolyStyle>
+        <color>3340a0c0</color>
+      </PolyStyle>
+    </Style>
+
+    <Placemark>
+      <name>{escape(basename)}</name>
+
+      <description>
+        Geometria original vetorizada pelo cidadão em campo.
+        A exportação não altera nem consolida seus vértices.
+      </description>
+
+      <styleUrl>#cidadao</styleUrl>
+
+      <ExtendedData>
+        {extended_data}
+      </ExtendedData>
+
+      {geometry_xml}
+    </Placemark>
+  </Document>
+</kml>
+"""
+
+    return Response(
+        content=kml.encode("utf-8"),
+        media_type="application/vnd.google-earth.kml+xml",
+        headers={
+            "Content-Disposition": (f'attachment; filename="{basename}.kml"'),
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+@router.get(
+    "/projects/{project_id}/lot-geometries/{geometry_id}/export/shapefile",
+)
+def export_project_lot_geometry_shapefile(
+    project_id: UUID,
+    geometry_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Response:
+    _ensure_project_access(
+        db,
+        project_id=project_id,
+        current_user=current_user,
+    )
+
+    geometry = _get_exportable_lot_geometry(
+        db,
+        project_id=project_id,
+        geometry_id=geometry_id,
+    )
+
+    context = _get_geometry_export_context(
+        db,
+        project_id=project_id,
+        geometry=geometry,
+    )
+
+    basename = _geometry_export_basename(
+        geometry,
+        context,
+    )
+
+    properties = _geometry_properties(
+        geometry,
+        context,
+    )
+
+    parts = _geojson_polygon_parts(geometry.geometry_geojson)
+
+    shp_buffer = io.BytesIO()
+    shx_buffer = io.BytesIO()
+    dbf_buffer = io.BytesIO()
+
+    writer = shapefile.Writer(
+        shp=shp_buffer,
+        shx=shx_buffer,
+        dbf=dbf_buffer,
+        shapeType=shapefile.POLYGON,
+        encoding="utf-8",
+    )
+
+    writer.field("GEOM_ID", "C", size=36)
+    writer.field("ORIGEM", "C", size=50)
+    writer.field("STATUS", "C", size=50)
+    writer.field("VERSAO", "N", size=8, decimal=0)
+    writer.field("LOTE", "C", size=50)
+    writer.field("SELO", "C", size=50)
+    writer.field("RESPONS", "C", size=120)
+    writer.field("CPF", "C", size=20)
+    writer.field("AREA_M2", "F", size=18, decimal=4)
+    writer.field("PERIM_M", "F", size=18, decimal=4)
+    writer.field("PREC_M", "F", size=18, decimal=4)
+    writer.field("SRC_LOCAL", "C", size=36)
+    writer.field("SRC_DEV", "C", size=36)
+
+    writer.poly(parts)
+
+    writer.record(
+        properties["geometry_id"],
+        properties["origin"],
+        properties["workflow_status"],
+        properties["version"],
+        properties["lot_code"] or "",
+        properties["seal_code"] or "",
+        properties["responsible_name"] or "",
+        properties["responsible_cpf"] or "",
+        properties["area_m2"] or 0,
+        properties["perimeter_m"] or 0,
+        properties["accuracy_m"] or 0,
+        properties["source_local_id"],
+        properties["source_device_id"],
+    )
+
+    writer.close()
+
+    prj = (
+        'GEOGCS["SIRGAS 2000",'
+        'DATUM["Sistema_de_Referencia_Geocentrico_para_las_AmericaS_2000",'
+        'SPHEROID["GRS 1980",6378137,298.257222101]],'
+        'PRIMEM["Greenwich",0],'
+        'UNIT["degree",0.0174532925199433],'
+        'AUTHORITY["EPSG","4674"]]'
+    )
+
+    metadata_json = json.dumps(
+        properties,
+        ensure_ascii=False,
+        indent=2,
+        default=str,
+    )
+
+    zip_buffer = io.BytesIO()
+
+    with zipfile.ZipFile(
+        zip_buffer,
+        mode="w",
+        compression=zipfile.ZIP_DEFLATED,
+    ) as archive:
+        archive.writestr(
+            f"{basename}.shp",
+            shp_buffer.getvalue(),
+        )
+        archive.writestr(
+            f"{basename}.shx",
+            shx_buffer.getvalue(),
+        )
+        archive.writestr(
+            f"{basename}.dbf",
+            dbf_buffer.getvalue(),
+        )
+        archive.writestr(
+            f"{basename}.prj",
+            prj,
+        )
+        archive.writestr(
+            f"{basename}.cpg",
+            "UTF-8",
+        )
+        archive.writestr(
+            f"{basename}_metadados.json",
+            metadata_json,
+        )
+
+    return Response(
+        content=zip_buffer.getvalue(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": (f'attachment; filename="{basename}_shapefile.zip"'),
+            "Cache-Control": "no-store",
+        },
     )
 
 
